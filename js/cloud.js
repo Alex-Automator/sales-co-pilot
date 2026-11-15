@@ -1,7 +1,7 @@
 // Sign-in and shared data in Firebase. The app keeps working on its in-memory state;
 // this layer loads that state from Firestore and writes back only the documents that changed.
 const Cloud = (function () {
-  const LISTS = ['params', 'vectors', 'cards', 'gdocs', 'taken'];
+  const LISTS = ['params', 'vectors', 'cards', 'gdocs', 'leads', 'taken'];
   let db, auth, hooks, subs = [], shadow = {}, loaded = {}, held = {}, parts = {}, dirty = false, timer = null, role = null;
   const now = () => new Date().toISOString();
 
@@ -52,7 +52,7 @@ const Cloud = (function () {
     };
     // Companies and directions come only if this person was given access; audiences and topics ('*') are shared.
     on('params', r === 'admin' ? [all('params')] : [has('params', '*'), has('params', uid)]);
-    on('vectors', [mine('vectors')]); on('cards', [mine('cards')]); on('gdocs', [mine('gdocs')]); on('users', [all('users')]);
+    on('vectors', [mine('vectors')]); on('cards', [mine('cards')]); on('gdocs', [mine('gdocs')]); on('leads', [mine('leads')]); on('users', [all('users')]);
     on('taken', [r === 'admin' ? all('taken') : all('taken').where('owner', '==', uid)]);
     if (r === 'admin') on('guards', [all('guards')]);
     else subs.push(db.collection('guards').doc(uid).onSnapshot((s) => take('guards', s.exists ? [Object.assign({ id: uid }, s.data())] : []), () => take('guards', [])));

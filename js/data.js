@@ -26,6 +26,15 @@ const UI_ICONS = {
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>', clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>', ring: '<circle cx="12" cy="12" r="6"/>',
   spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7z"/>',
 };
+// Columns recognised when a contact list is imported: field -> accepted header names (lower case, letters only).
+const LEAD_COLS = {
+  firstName: ['firstname', 'first'], lastName: ['lastname', 'last', 'surname'], jobTitle: ['jobtitle', 'title', 'position'],
+  email: ['email', 'emailaddress', 'mail'], phone: ['directphone', 'phone', 'mobile'], linkedin: ['linkedin', 'linkedinurl'],
+  company: ['company', 'companyname'], website: ['website', 'businesswebsite', 'url'], companyLinkedin: ['companylinkedin', 'companylin'],
+  companyPhone: ['companyphone', 'corporatephonenumber'], country: ['country'], state: ['state'], city: ['city'],
+  seniority: ['seniority'], employees: ['employees'], fit: ['fitevidence'], source: ['source'],
+};
+const SEQ_VARS = ['firstName', 'lastName', 'company', 'jobTitle', 'city', 'myName'];
 const SENIORITY = ['Owner / C-level', 'VP', 'Director', 'Manager'];
 // Default grey outline pictures for parameters without an image.
 const ICONS = {
@@ -43,7 +52,7 @@ function dayOffset(n) {
 // Empty state for the real program: everything comes from the server after sign-in.
 function emptyState() {
   return { v: 2, lang: 'en', view: 'vector', active: '', draft: {}, vectors: [], cards: [], docs: [], gdocs: [],
-    zones: { company: [], direction: [], audience: [], topic: [] }, taken: [], legend: defaultLegend(),
+    zones: { company: [], direction: [], audience: [], topic: [] }, taken: [], leads: [], legend: defaultLegend(),
     user: { name: '', email: '', photo: '' }, widgets: WIDGETS.slice(), guideSeen: false };
 }
 function demoState() {
@@ -54,7 +63,7 @@ function demoState() {
     auto: { follow: false, reply: false, notify: true, draft: true }, notes: '', photo: '',
   }, o);
   return {
-    v: 2, taken: [], legend: defaultLegend(), user: defaultUser(), widgets: WIDGETS.slice(), gdocs: [], guideSeen: false, lang: 'en', view: 'vector', active: 'v1', draft: {},
+    v: 2, taken: [], leads: [], legend: defaultLegend(), user: defaultUser(), widgets: WIDGETS.slice(), gdocs: [], guideSeen: false, lang: 'en', view: 'vector', active: 'v1', draft: {},
     vectors: [
       { id: 'v1', company: 'c1', direction: 'd1', audience: 'a1', topic: 't1', owner: 'me' },
       { id: 'v2', company: 'c3', direction: 'd4', audience: 'a3', topic: 't3', owner: 'me' },

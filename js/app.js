@@ -7,11 +7,11 @@
   const PREFS = ['lang', 'view', 'active', 'draft', 'widgets', 'guideSeen', 'show'];
   const au = { status: CLOUD ? 'loading' : 'in', uid: 'me', role: 'admin', users: [], guards: {}, err: '' };
   let S = load();
-  let ui = { open: null, edit: null, q: '', ftype: 'all', fdue: false, zone: 'company', dbtab: 'library', delArm: false, adding: null, fresh: null, popped: null, menu: null, legendEdit: false, fcolor: '', cal: 0, ai: !S.guideSeen, aiView: 'home', aiLog: [] };
+  let ui = { open: null, edit: null, q: '', ftype: 'all', fdue: false, zone: 'company', dbtab: 'library', delArm: false, adding: null, fresh: null, popped: null, menu: null, legendEdit: false, fcolor: '', ctab: 'details', lq: '', imp: null, prev: -1, checkLeft: 0, cal: 0, ai: !S.guideSeen, aiView: 'home', aiLog: [] };
 
   function load() {
     if (CLOUD) { const s = emptyState(); try { Object.assign(s, JSON.parse(localStorage.getItem(PKEY)) || {}); } catch (e) {} return s; }
-    try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.v === 2) { s.legend = s.legend || defaultLegend(); s.user = s.user || defaultUser(); s.widgets = s.widgets || WIDGETS.slice(); s.gdocs = s.gdocs || []; return s; } } catch (e) {}
+    try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.v === 2) { s.legend = s.legend || defaultLegend(); s.user = s.user || defaultUser(); s.widgets = s.widgets || WIDGETS.slice(); s.gdocs = s.gdocs || []; s.leads = s.leads || []; s.taken = s.taken || []; return s; } } catch (e) {}
     return demoState();
   }
   function save() {
@@ -53,7 +53,7 @@
   const takenId = (company, email) => (company + '__' + String(email).trim().toLowerCase()).replace(/[\/\s]/g, '_');
   // Why a contact is closed for this operator: on the admin's forbidden list, or already in another manager's work.
   function blockedWhy(c) {
-    if (c.type !== 'contact') return '';
+    if (c.type && c.type !== 'contact') return '';
     const email = String(c.f.email || '').trim().toLowerCase(); if (!email) return '';
     const hit = (au.guards[au.uid] || []).some((g) => { g = String(g).trim().toLowerCase().replace(/^@/, ''); return g && (email === g || email.endsWith('@' + g)); });
     return hit ? 'admin' : c.blocked === 'taken' ? 'taken' : '';
@@ -71,9 +71,11 @@
     };
     S.cards.forEach((c) => { c.acl = aclFor(c, c.type); if (!c.owner) { const v = S.vectors.find((x) => x.id === c.vid); if (v) c.owner = v.owner; } });
     S.gdocs.forEach((g) => { g.acl = aclFor(g, 'doc'); });
+    S.leads.forEach((l) => { l.acl = aclFor(l, 'lead'); });
     // One marker per contact email, so another manager's program can tell the contact is already in work without seeing it.
     const mine = {};
     S.cards.forEach((c) => { const e = String(c.f.email || '').trim().toLowerCase(); if (c.type === 'contact' && c.owner === au.uid && e && !blockedWhy(c) && c.okEmail === e && c.vec && c.vec.company) mine[takenId(c.vec.company, e)] = { id: takenId(c.vec.company, e), company: c.vec.company, email: e, owner: au.uid }; });
+    S.leads.forEach((l) => { const e = l.f.email; if (l.owner === au.uid && e && !blockedWhy(l) && l.okEmail === e && l.company) mine[takenId(l.company, e)] = { id: takenId(l.company, e), company: l.company, email: e, owner: au.uid }; });
     S.taken = (S.taken || []).filter((x) => x.owner !== au.uid).concat(Object.keys(mine).map((k) => mine[k]));
   }
   const draftComplete = () => ZONES.every((z) => item(z, S.draft[z]));
@@ -219,12 +221,101 @@
   function tog(c, key, label) {
     return `<button class="tog" data-act="auto" data-k="${key}"><span class="sw ${c.auto[key] ? 'on' : ''}"><i></i></span><span>${label}</span></button>`;
   }
+  // ---------- recipients of a campaign ----------
+  const leadName = (l) => [l.f.firstName, l.f.lastName].filter(Boolean).join(' ') || l.f.email;
+  function vRecipients(c) {
+    const all = S.leads.filter((l) => l.cid === c.id), q = ui.lq.trim().toLowerCase();
+    const list = all.filter((l) => !q || [leadName(l), l.f.company, l.f.email, l.f.jobTitle].join(' ').toLowerCase().includes(q));
+    const rows = list.slice(0, 200).map((l) => `<tr><td>${esc(leadName(l))}</td><td>${esc(l.f.jobTitle || '')}</td><td>${esc(l.f.company || '')}</td><td>${esc(l.f.email)}</td>
+      <td>${blockedWhy(l) ? `<span class="blk" title="${t(blockedWhy(l) === 'admin' ? 'blockedAdmin' : 'blockedTaken')}">${t('blockedBadge')}</span>` : l.card ? `<span class="ty">${t('hasCard')}</span>` : `<button class="link" data-act="leadCard" data-id="${l.id}">${t('toCard')}</button>`}</td>
+      <td><button class="link" data-act="leadDel" data-id="${l.id}">×</button></td></tr>`).join('');
+    const imp = ui.imp ? `<p class="hint">${ui.imp.err ? t(ui.imp.err) : `${ui.imp.added} ${t('impAdded')} · ${ui.imp.dup} ${t('impDup')} · ${ui.imp.bad} ${t('impBad')}`}</p>` : '';
+    return `<textarea class="in" rows="4" data-leadpaste placeholder="${t('pasteHint')}"></textarea>
+      <div class="acts tight"><button class="btn sm" data-act="leadImport">${t('importBtn')}</button><label class="btn ghost sm filebtn">${t('uploadCsv')}<input type="file" accept=".csv,.tsv,.txt,text/csv" data-leadfile hidden></label></div>
+      <p class="sub small">${t('sheetLater')}</p>${imp}${ui.checkLeft ? `<p class="sub small">${t('checking')}: ${ui.checkLeft} ${t('left')}</p>` : ''}
+      ${all.length ? `<div class="acts tight"><input class="in search" data-lq placeholder="${t('searchLeads')}" value="${esc(ui.lq)}"><span class="sub small">${Math.min(200, list.length)} ${t('shown')} ${t('ofTotal')} ${all.length}</span>
+        <button class="btn ghost sm danger" data-act="leadClear">${ui.delArm ? t('delSure') : t('removeAll')}</button></div>
+      <table class="ltable"><tr><th>${t('name')}</th><th>${t('jobTitle')}</th><th>${t('company')}</th><th>${t('email')}</th><th></th><th></th></tr>${rows}</table>` : ''}`;
+  }
+  // Reads rows copied from a spreadsheet (tabs) or a CSV file (commas or semicolons, quotes allowed).
+  function parseTable(text) {
+    const first = text.split(/\r?\n/)[0] || '', d = first.includes('\t') ? '\t' : (first.split(';').length > first.split(',').length ? ';' : ',');
+    const rows = []; let row = [], cell = '', q = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (q) { if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += ch; }
+      else if (ch === '"' && cell === '') q = true;
+      else if (ch === d) { row.push(cell); cell = ''; }
+      else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(cell); cell = ''; rows.push(row); row = []; }
+      else cell += ch;
+    }
+    if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+    return rows.filter((r) => r.some((x) => x.trim() !== ''));
+  }
+  function importLeads(c, text) {
+    const rows = parseTable(text), norm = (h) => String(h).toLowerCase().replace(/[^a-z]/g, '');
+    let hi = -1, map = null;
+    for (let i = 0; i < Math.min(5, rows.length) && hi < 0; i++) {
+      const m = {}; rows[i].forEach((h, j) => { const n = norm(h); Object.keys(LEAD_COLS).forEach((k) => { if (!(k in m) && LEAD_COLS[k].includes(n)) m[k] = j; }); });
+      if ('email' in m) { hi = i; map = m; }
+    }
+    if (hi < 0) { ui.imp = { err: 'needHeader' }; render(); return; }
+    const v = S.vectors.find((x) => x.id === c.vid), company = v ? v.company : (c.vec || {}).company;
+    const seen = {}; S.leads.forEach((l) => { if (l.company === company) seen[l.f.email] = 1; });
+    S.cards.forEach((k) => { const e = String(k.f.email || '').trim().toLowerCase(); if (k.type === 'contact' && e && (k.vec || {}).company === company) seen[e] = 1; });
+    const res = { added: 0, dup: 0, bad: 0 }; let n = Date.now();
+    rows.slice(hi + 1).forEach((r) => {
+      const f = {}; Object.keys(map).forEach((k) => { const val = String(r[map[k]] || '').trim(); if (val) f[k] = val; });
+      f.email = String(f.email || '').toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email)) { res.bad++; return; }
+      if (seen[f.email]) { res.dup++; return; }
+      seen[f.email] = 1; res.added++;
+      S.leads.push({ id: uid('L'), cid: c.id, vid: c.vid, company, owner: au.uid, acl: (c.acl || []).slice(), ord: n++, f, blocked: '', okEmail: CLOUD ? '' : f.email });
+    });
+    ui.imp = res; commit(); checkLeads();
+  }
+  // Asks the server, a few at a time, whether another manager already works with each new recipient.
+  function checkLeads() {
+    if (!CLOUD) return;
+    const todo = S.leads.filter((l) => l.owner === au.uid && !l.blocked && l.okEmail !== l.f.email && l.company);
+    ui.checkLeft = todo.length; if (!todo.length) { commit(); return; }
+    Promise.all(todo.slice(0, 15).map((l) => Cloud.takenBy(takenId(l.company, l.f.email)).then((owner) => {
+      if (owner && owner !== au.uid) l.blocked = 'taken'; else l.okEmail = l.f.email;
+    }))).then(() => { save(); if (!typing()) render(); checkLeads(); });
+  }
+
+  // ---------- letters: one letter or a chain, written, checked and approved before anything is sent ----------
+  const newStep = (day) => ({ id: uid('s'), day, subject: '', body: '', status: 'draft' });
+  const seqOf = (c) => { if (!c.seq) c.seq = { from: '', steps: [newStep(0), newStep(4), newStep(9)] }; return c.seq; };
+  function sampleFor(c) {
+    if (c.type === 'contact') { const p = c.title.split(' '); return { firstName: p[0], lastName: p.slice(1).join(' '), company: c.f.company, jobTitle: c.f.jobTitle, city: '' }; }
+    const l = S.leads.find((x) => x.cid === c.id && !blockedWhy(x)); return l ? l.f : { firstName: 'Anna', lastName: 'Berg', company: 'Example AS', jobTitle: 'CEO', city: 'Oslo' };
+  }
+  const fillVars = (text, r) => String(text || '').replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => (k === 'myName' ? S.user.name : r[k]) || m);
+  function vSequence(c) {
+    const seq = seqOf(c), v = S.vectors.find((x) => x.id === c.vid), co = v ? item('company', v.company) : null, mbs = myMailboxes(co);
+    const from = mbs.length ? `<select class="in" data-seqfrom>${mbs.map((m) => `<option ${((seq.from || primaryMailbox(co)) === m.email) ? 'selected' : ''}>${esc(m.email)}</option>`).join('')}</select>` : `<span class="sub">${t('noMailbox')}</span>`;
+    const done = seq.steps.filter((x) => x.status === 'approved').length, smp = sampleFor(c);
+    const steps = seq.steps.map((st, i) => `<div class="step st-${st.status}" data-step="${i}"><div class="sth"><b>${t('letter')} ${i + 1}</b>
+        <label class="dayl" title="${t('dayHint')}">${t('dayN')} <input class="in" type="number" min="0" data-seq="${i}|day" value="${+st.day || 0}" ${i === 0 ? 'disabled' : ''}></label>
+        <span class="stt">${t('seq_' + st.status)}</span>${seq.steps.length > 1 ? `<button class="link" data-act="seqDel" data-i="${i}">×</button>` : ''}</div>
+      <input class="in" data-seq="${i}|subject" placeholder="${t('subject')}" value="${esc(st.subject)}">
+      <textarea class="in" rows="6" data-seq="${i}|body" placeholder="${t('body')}">${esc(st.body)}</textarea>
+      <div class="vars">${SEQ_VARS.map((x) => `<button class="chip" data-act="seqVar" data-i="${i}" data-v="${x}">{{${x}}}</button>`).join('')}</div>
+      <div class="acts tight"><button class="btn ghost sm" disabled title="${t('stage')} 3">${t('aiDraft')}</button><button class="btn ghost sm" disabled title="${t('stage')} 3">${t('aiReview')}</button>
+        <button class="btn ghost sm" data-act="seqPreview" data-i="${i}">${t('preview')}</button>
+        <button class="btn sm" data-act="seqApprove" data-i="${i}" ${st.status === 'approved' || (st.subject.trim() && st.body.trim()) ? '' : 'disabled'}>${st.status === 'approved' ? t('unapprove') : t('approve')}</button></div>
+      ${ui.prev === i ? `<div class="prevbox"><small>${t('previewFor')} ${esc([smp.firstName, smp.lastName].filter(Boolean).join(' '))}</small><b>${esc(fillVars(st.subject, smp))}</b><pre>${esc(fillVars(st.body, smp))}</pre></div>` : ''}</div>`).join('');
+    return `<div class="seqhead"><label class="fromf"><span>${t('fromMailbox')}</span>${from}</label><span class="ty">${done} / ${seq.steps.length} ${t('approvedOf')}</span></div>
+      ${steps}<button class="add" data-act="seqAdd">${t('addLetter')}</button><p class="sub small">${t('seqNote')}</p>`;
+  }
+
   function vCardModal() {
     const c = S.cards.find((x) => x.id === ui.open); if (!c) return '';
     const F = {
       contact: [['jobTitle', t('jobTitle')], ['company', t('company')], ['email', t('email')], ['phone', t('phone')], ['linkedin', t('linkedin')]],
       company: [['website', t('website')], ['country', t('country')], ['phone', t('phone')], ['linkedin', t('linkedin')]],
-      campaign: [['sheetUrl', t('sheetUrl')], ['dailyCap', t('dailyCap')], ['variantA', t('variantA'), 1], ['variantB', t('variantB'), 1], ['variantC', t('variantC'), 1]],
+      campaign: [['sheetUrl', t('sheetUrl')], ['dailyCap', t('dailyCap')]],
       task: [],
     }[c.type];
     const hasPhoto = c.type === 'contact' || c.type === 'company';
@@ -232,11 +323,15 @@
     const photo = hasPhoto ? `<div class="photo" tabindex="0" data-photo title="${t('photoHint')}">${c.photo ? `<img src="${c.photo}" alt="">` : esc(logoText)}</div>
       <p class="sub small"><label class="link filebtn">${t('uploadImage')}<input type="file" accept="image/*" data-file hidden></label> · <span class="hint2">${t('photoHint')}</span>${c.photo ? ` · <button class="link" data-act="rmPhoto">${t('removePhoto')}</button>` : ''}</p>` : '';
     const opts = (list, cur, pre) => list.map((x) => `<option value="${x}" ${x === cur ? 'selected' : ''}>${t(pre + x)}</option>`).join('');
-    return `<div class="overlay" data-act="closeBg"><div class="modal" role="dialog"><button class="mclose" data-act="closeAny" aria-label="Close">×</button>
-      <div class="mleft">${photo}
+    const tabList = c.type === 'campaign' ? ['details', 'recipients', 'sequence'] : c.type === 'contact' ? ['details', 'sequence'] : [];
+    const tab = tabList.includes(ui.ctab) ? ui.ctab : 'details';
+    const nLeads = S.leads.filter((l) => l.cid === c.id).length;
+    const tabs = tabList.length ? `<div class="tabs ctabs">${tabList.map((x) => `<button class="${tab === x ? 'on' : ''}" data-act="ctab" data-v="${x}">${t('tab' + x[0].toUpperCase() + x.slice(1))}${x === 'recipients' ? ` · ${nLeads}` : ''}</button>`).join('')}</div>` : '';
+    return `<div class="overlay" data-act="closeBg"><div class="modal ${tabList.length ? 'wide' : ''}" role="dialog"><button class="mclose" data-act="closeAny" aria-label="Close">×</button>
+      <div class="mleft">${tabs}${tab === 'recipients' ? vRecipients(c) : tab === 'sequence' ? vSequence(c) : `${photo}
         <label class="fl"><span>${c.type === 'contact' ? t('name') : t('title')}</span><input class="in big" data-top="title" value="${esc(c.title)}"></label>
         ${F.map((x) => field(c, x[0], x[1], x[2])).join('')}
-        <label class="fl"><span>${t('notes')}</span><textarea class="in" data-top="notes" rows="5">${esc(c.notes)}</textarea></label>
+        <label class="fl"><span>${t('notes')}</span><textarea class="in" data-top="notes" rows="5">${esc(c.notes)}</textarea></label>`}
       </div>
       <div class="mright">
         <div class="row2"><label class="fl"><span>${t('type')}</span><select class="in" data-top="type">${opts(TYPES, c.type, 'type_')}</select></label>
@@ -490,6 +585,25 @@
     moveCard(d) { const c = S.cards.find((x) => x.id === d.id), n = STAGES[stageIdx(c.stage) + +d.d]; if (n) { c.stage = n[0]; commit(); } },
     gotoStage(d) { const col = document.querySelector(`.col[data-stage="${d.stage}"]`); if (col) col.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' }); },
     wMove(d) { const i = S.widgets.indexOf(d.id), j = i + +d.d; if (i >= 0 && j >= 0 && j < S.widgets.length) { [S.widgets[i], S.widgets[j]] = [S.widgets[j], S.widgets[i]]; commit(); } },
+    ctab(d) { ui.ctab = d.v; ui.imp = null; ui.prev = -1; ui.delArm = false; render(); },
+    leadImport() { const el = document.querySelector('[data-leadpaste]'); if (el && el.value.trim()) importLeads(cur(), el.value); },
+    leadDel(d) { S.leads = S.leads.filter((l) => l.id !== d.id); commit(); },
+    leadClear() { if (!ui.delArm) { ui.delArm = true; render(); return; } const id = ui.open; S.leads = S.leads.filter((l) => l.cid !== id); ui.delArm = false; ui.imp = null; commit(); },
+    leadCard(d) {
+      const l = S.leads.find((x) => x.id === d.id), c = cur(); if (!l) return;
+      const k = { id: uid('k'), vid: c.vid, owner: au.uid, acl: (c.acl || []).slice(), ord: Date.now(), type: 'contact', stage: 'new', title: leadName(l), vec: Object.assign({}, c.vec), parent: c.id,
+        f: { jobTitle: l.f.jobTitle || '', company: l.f.company || '', email: l.f.email, phone: l.f.phone || '', linkedin: l.f.linkedin || '' }, next: { text: '', date: '' },
+        awaiting: false, auto: { follow: false, reply: false, notify: true, draft: true }, notes: '', photo: '', blocked: l.blocked || '', okEmail: l.okEmail || '' };
+      S.cards.push(k); l.card = k.id; commit();
+    },
+    seqAdd() { const s = seqOf(cur()); s.steps.push(newStep((+s.steps[s.steps.length - 1].day || 0) + 5)); commit(); },
+    seqDel(d) { seqOf(cur()).steps.splice(+d.i, 1); ui.prev = -1; commit(); },
+    seqApprove(d) { const st = seqOf(cur()).steps[+d.i]; st.status = st.status === 'approved' ? 'draft' : 'approved'; commit(); },
+    seqPreview(d) { ui.prev = ui.prev === +d.i ? -1 : +d.i; render(); },
+    seqVar(d) {
+      const st = seqOf(cur()).steps[+d.i], el = document.querySelector(`[data-seq="${d.i}|body"]`), pos = el ? el.selectionStart : st.body.length;
+      st.body = st.body.slice(0, pos) + '{{' + d.v + '}}' + st.body.slice(pos); st.status = 'draft'; commit();
+    },
     taskDone(d) { const c = S.cards.find((x) => x.id === d.id); c.done = !c.done; commit(); },
     calPrev() { ui.cal--; render(); },
     calNext() { ui.cal++; render(); },
@@ -534,7 +648,7 @@
     closeEdit() { ui.edit = null; render(); },
     delVector() {
       if (!ui.delArm) { ui.delArm = true; render(); return; }
-      const gone = ui.edit.id; S.vectors = S.vectors.filter((v) => v.id !== gone); S.cards = S.cards.filter((c) => c.vid !== gone); S.gdocs = S.gdocs.filter((g) => g.vid !== gone); if (S.active === gone) S.active = ''; ui.edit = null; commit();
+      const gone = ui.edit.id; S.vectors = S.vectors.filter((v) => v.id !== gone); S.cards = S.cards.filter((c) => c.vid !== gone); S.gdocs = S.gdocs.filter((g) => g.vid !== gone); S.leads = S.leads.filter((l) => l.vid !== gone); if (S.active === gone) S.active = ''; ui.edit = null; commit();
     },
     delParam() {
       if (!ui.delArm) { ui.delArm = true; render(); return; }
@@ -552,7 +666,7 @@
     fdue() { ui.fdue = !ui.fdue; render(); },
     zone(d) { ui.zone = d.v; render(); },
     dbtab(d) { ui.dbtab = d.v; render(); },
-    open(d) { ui.open = d.id; ui.delArm = false; render(); },
+    open(d) { ui.open = d.id; ui.delArm = false; ui.ctab = 'details'; ui.imp = null; ui.prev = -1; ui.lq = ''; render(); },
     close() { ui.open = null; render(); },
     closeAny() { ui.open = null; ui.edit = null; render(); },
     closeBg(d, e) { if (e.target.classList.contains('overlay')) { ui.open = null; ui.edit = null; render(); } },
@@ -565,10 +679,10 @@
     },
     del() {
       if (!ui.delArm) { ui.delArm = true; render(); return; }
-      S.cards = S.cards.filter((c) => c.id !== ui.open); ui.open = null; commit();
+      S.cards = S.cards.filter((c) => c.id !== ui.open); S.leads = S.leads.filter((l) => l.cid !== ui.open); ui.open = null; commit();
     },
     rmDoc(d) { S.docs = S.docs.filter((x) => x.id !== d.id); commit(); },
-    reset() { S = demoState(); S.guideSeen = true; ui.aiLog = []; ui.open = null; ui.edit = null; ui.fcolor = ''; ui.legendEdit = false; commit(); },
+    reset() { S = demoState(); S.leads = []; S.guideSeen = true; ui.aiLog = []; ui.open = null; ui.edit = null; ui.fcolor = ''; ui.legendEdit = false; commit(); },
   };
 
   function newParam(zone, name) {
@@ -627,6 +741,15 @@
   document.addEventListener('input', (e) => {
     const el = e.target, c = cur(), p = curParam();
     if (el.hasAttribute('data-search')) { ui.q = el.value; const pos = el.selectionStart; render(); const n = document.querySelector('[data-search]'); n.focus(); n.setSelectionRange(pos, pos); return; }
+    if (el.hasAttribute('data-lq')) { ui.lq = el.value; const pos = el.selectionStart; render(); const n = document.querySelector('[data-lq]'); n.focus(); n.setSelectionRange(pos, pos); return; }
+    if (el.dataset.seq && c) {
+      const [i, k] = el.dataset.seq.split('|'), st = seqOf(c).steps[+i]; st[k] = k === 'day' ? Math.max(0, +el.value || 0) : el.value;
+      // Changing an approved letter sends it back to draft, so nothing unapproved can ever be sent.
+      const box = el.closest('.step'), btn = box && box.querySelector('[data-act="seqApprove"]');
+      if (k !== 'day' && st.status !== 'draft') { st.status = 'draft'; if (box) { box.className = 'step st-draft'; box.querySelector('.stt').textContent = t('seq_draft'); if (btn) btn.textContent = t('approve'); } }
+      if (btn) btn.disabled = !(st.subject.trim() && st.body.trim());
+      save(); return;
+    }
     if (el.hasAttribute('data-cq')) { ui.cq = el.value; const pos = el.selectionStart; render(); const n = document.querySelector('[data-cq]'); n.focus(); n.setSelectionRange(pos, pos); return; }
     if (el.dataset.u) { S.user[el.dataset.u] = el.value; save(); return; }
     if (el.dataset.lgname) { legendOf(el.dataset.lgname).label = el.value; save(); return; }
@@ -643,6 +766,8 @@
   document.addEventListener('change', (e) => {
     const el = e.target, c = cur();
     if (el.hasAttribute('data-file')) { takeImage(el.files[0]); return; }
+    if (el.hasAttribute('data-leadfile')) { const f = el.files[0]; if (f && c) f.text().then((txt) => importLeads(c, txt)); return; }
+    if (el.hasAttribute('data-seqfrom') && c) { seqOf(c).from = el.value; save(); return; }
     if (el.hasAttribute('data-show')) { S.show = el.value; commit(); return; }
     if (el.dataset.urole) { const u = au.users.find((x) => x.id === el.dataset.urole); if (u) u.role = el.value; Cloud.setRole(el.dataset.urole, el.value); render(); return; }
     if (el.dataset.cacc) {
@@ -697,6 +822,7 @@
     Cloud.init(window.FIREBASE_CONFIG, {
       auth(a) {
         Object.assign(au, { err: '' }, a);
+        ui.adding = null; ui.q = ''; ui.ctab = 'details'; ui.imp = null;
         if (a.user) S.user = { name: a.user.name || '', email: a.user.email || '', photo: a.user.photo || '' };
         if (a.status !== 'in') { au.users = []; ui.open = null; ui.edit = null; } else { S.view = 'vector'; S.draft = {}; if (a.role !== 'admin' && S.show !== 'mine' && S.show !== 'all') S.show = ''; }
         render();
@@ -707,6 +833,7 @@
         else if (name === 'vectors') S.vectors = d.sort((a, b) => ord(b, a));
         else if (name === 'cards') S.cards = d.sort(ord);
         else if (name === 'gdocs') S.gdocs = d.sort(ord);
+        else if (name === 'leads') S.leads = d.sort(ord);
         else if (name === 'users') au.users = d;
         else if (name === 'guards') { au.guards = {}; d.forEach((g) => { au.guards[g.id] = g.list || []; }); }
         else if (name === 'taken') S.taken = d;
@@ -721,9 +848,9 @@
         if (!typing()) render();
       },
       collect() {
-        const out = { params: {}, vectors: {}, cards: {}, gdocs: {}, taken: {}, workspace: { shared: { legend: S.legend, docs: S.docs } } };
+        const out = { params: {}, vectors: {}, cards: {}, gdocs: {}, leads: {}, taken: {}, workspace: { shared: { legend: S.legend, docs: S.docs } } };
         ZONES.forEach((z) => S.zones[z].forEach((it) => { out.params[it.id] = Object.assign({}, it, { zone: z }); }));
-        S.vectors.forEach((v) => { out.vectors[v.id] = v; }); S.cards.forEach((c) => { out.cards[c.id] = c; }); S.gdocs.forEach((g) => { out.gdocs[g.id] = g; }); (S.taken || []).forEach((x) => { out.taken[x.id] = x; });
+        S.vectors.forEach((v) => { out.vectors[v.id] = v; }); S.cards.forEach((c) => { out.cards[c.id] = c; }); S.gdocs.forEach((g) => { out.gdocs[g.id] = g; }); (S.taken || []).forEach((x) => { out.taken[x.id] = x; }); S.leads.forEach((l) => { out.leads[l.id] = l; });
         return out;
       },
       error(e) { ui.err = e && e.message ? e.message : String(e); render(); },
