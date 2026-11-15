@@ -5,6 +5,14 @@ const STAGES = [
 ];
 const ZONES = ['company', 'direction', 'audience', 'topic'];
 const TYPES = ['contact', 'company', 'campaign', 'task'];
+const SENIORITY = ['Owner / C-level', 'VP', 'Director', 'Manager'];
+// Default grey outline pictures for parameters without an image.
+const ICONS = {
+  company: '<path d="M4 21V5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v16M14 9h5a1 1 0 0 1 1 1v11M3 21h18M8 8h2M8 12h2M8 16h2"/>',
+  direction: '<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/>',
+  audience: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  topic: '<path d="M3 11V4a1 1 0 0 1 1-1h7l10 10-8 8z"/><circle cx="7.5" cy="7.5" r="1.2"/>',
+};
 
 function dayOffset(n) {
   const d = new Date(); d.setDate(d.getDate() + n);
@@ -19,26 +27,37 @@ function demoState() {
     auto: { follow: false, reply: false, notify: true, draft: true }, notes: '', photo: '',
   }, o);
   return {
-    v: 1, lang: 'en', view: 'vector', sel: { ...V },
+    v: 2, lang: 'en', view: 'vector', active: 'v1', draft: {},
+    vectors: [
+      { id: 'v1', company: 'c1', direction: 'd1', audience: 'a1', topic: 't1', owner: 'me' },
+      { id: 'v2', company: 'c3', direction: 'd4', audience: 'a3', topic: 't3', owner: 'me' },
+    ],
     zones: {
       company: [
-        { id: 'c1', name: 'ODDIN', mailbox: 'sales@oddin.net', signature: 'ODDIN' },
-        { id: 'c2', name: 'INDUSTRIT', mailbox: 'sales@industrit.net', signature: 'INDUSTRIT' },
-        { id: 'c3', name: 'BidPlan Partner', mailbox: 'sales@bidplanpartner.net', signature: 'BidPlan Partner' },
+        { id: 'c1', name: 'ODDIN', img: '', s: { website: 'https://oddin.design', signature: 'ODDIN',
+          mailboxes: [{ email: 'sales@oddin.com', primary: true }, { email: 'sales@oddin.net', primary: false }] } },
+        { id: 'c2', name: 'INDUSTRIT', img: '', s: { website: 'https://www.industrit.com', signature: 'INDUSTRIT',
+          mailboxes: [{ email: 'sales@industrit.com', primary: true }, { email: 'sales@industrit.net', primary: false }] } },
+        { id: 'c3', name: 'BidPlan Partner', img: '', s: { website: 'https://bidplanpartner.com', signature: 'BidPlan Partner',
+          mailboxes: [{ email: 'sales@bidplanpartner.com', primary: true }, { email: 'sales@bidplanpartner.net', primary: false }] } },
       ],
       direction: [
-        { id: 'd1', name: '3D Simulation of construction', company: 'c1' },
-        { id: 'd2', name: 'Design & Engineering', company: 'c1' },
-        { id: 'd3', name: 'Industrial projects', company: 'c2' },
-        { id: 'd4', name: 'Construction Bids', company: 'c3' },
+        { id: 'd1', name: '3D / 4D simulation of construction', company: 'c1', img: '', s: { desc: '',
+          criteria: ['Builds data centers or large industrial halls', 'Publishes project cases on the website', 'Works on tenders'] } },
+        { id: 'd2', name: 'Structural design: steel, concrete, timber', company: 'c1', img: '', s: { desc: '', criteria: [] } },
+        { id: 'd5', name: 'Tender preparation', company: 'c1', img: '', s: { desc: '', criteria: [] } },
+        { id: 'd3', name: 'Industrial projects', company: 'c2', img: '', s: { desc: '', criteria: [] } },
+        { id: 'd4', name: 'Construction Bids', company: 'c3', img: '', s: { desc: '', criteria: [] } },
       ],
       audience: [
-        { id: 'a1', name: 'CEO / Owner' }, { id: 'a2', name: 'Project Director' },
-        { id: 'a3', name: 'Preconstruction / BD' },
+        { id: 'a1', name: 'CEO / Owner', img: '', s: { titles: 'CEO, Owner, Founder, President', seniority: ['Owner / C-level'], role: 'decision', tone: 'formal' } },
+        { id: 'a2', name: 'Project Director', img: '', s: { titles: 'Project Director, Head of Projects', seniority: ['Director'], role: 'decision', tone: 'neutral' } },
+        { id: 'a3', name: 'Preconstruction / BD', img: '', s: { titles: 'Preconstruction, Business Development, Estimating', seniority: ['VP', 'Director', 'Manager'], role: 'influence', tone: 'neutral' } },
       ],
       topic: [
-        { id: 't1', name: 'Data center builders' }, { id: 't2', name: 'MEP installation contractors' },
-        { id: 't3', name: 'General contractors US' },
+        { id: 't1', name: 'Data center builders', img: '', s: { hook: 'A data center project the company has built or is tendering for', keywords: 'data center, data centre, hyperscale, MW', proof: '' } },
+        { id: 't2', name: 'MEP installation contractors', img: '', s: { hook: '', keywords: '', proof: '' } },
+        { id: 't3', name: 'General contractors US', img: '', s: { hook: '', keywords: '', proof: '' } },
       ],
     },
     cards: [

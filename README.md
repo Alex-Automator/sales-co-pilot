@@ -3,7 +3,7 @@
 Web app for finding B2B clients, contacting them and tracking how effective those contacts are.
 Built for ODDIN, INDUSTRIT and BidPlan Partner.
 
-**Status: revision 1** — the interface on demo data. Nothing is sent anywhere; data is saved only in the browser.
+**Status: revision 2** — the interface on demo data. Nothing is sent anywhere; data is saved only in the browser.
 
 ## Try it
 

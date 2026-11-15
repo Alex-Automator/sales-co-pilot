@@ -1,12 +1,12 @@
-// Sales-Co-pilot, revision 1: interface on demo data, saved in the browser.
+// Sales-Co-pilot, revision 2 of the first screen: interface on demo data, saved in the browser.
 // No sign-in, mail, Sheets or AI yet: those arrive in later stages (see docs/SPEC.md).
 (function () {
-  const KEY = 'sales-co-pilot-v1';
+  const KEY = 'sales-co-pilot-v2';
   let S = load();
-  let ui = { open: null, wiz: null, q: '', ftype: 'all', fdue: false, zone: 'company', dbtab: 'library', delArm: false, adding: null };
+  let ui = { open: null, edit: null, q: '', ftype: 'all', fdue: false, zone: 'company', dbtab: 'library', delArm: false, adding: null, fresh: null, popped: null };
 
   function load() {
-    try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.v === 1) return s; } catch (e) {}
+    try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.v === 2) return s; } catch (e) {}
     return demoState();
   }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
@@ -20,54 +20,74 @@
   const closed = (c) => c.stage === 'signed' || c.stage === 'lost';
   const isDue = (c) => c.next && c.next.date && c.next.date <= today() && !closed(c);
   const initials = (s) => String(s || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+  const activeVector = () => S.vectors.find((v) => v.id === S.active);
+  const inVector = (c, v) => ZONES.every((z) => c.vec[z] === v[z]);
+  const tally = (cs) => ({ reply: cs.filter((c) => c.awaiting && !closed(c)).length, due: cs.filter(isDue).length });
+  const primaryMailbox = (co) => { const m = (co && co.s.mailboxes) || []; return (m.find((x) => x.primary) || m[0] || {}).email || ''; };
+  const draftComplete = () => ZONES.every((z) => item(z, S.draft[z]));
+  const sameVector = (d) => S.vectors.find((v) => ZONES.every((z) => v[z] === d[z]));
 
-  function zoneItems(zone) {
-    if (zone === 'direction') return S.zones.direction.filter((d) => d.company === S.sel.company);
-    return S.zones[zone];
+  function pic(zone, it, cls) {
+    const inner = it && it.img ? `<img class="mono" src="${it.img}" alt="">`
+      : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${ICONS[zone]}</svg>`;
+    return `<span class="pimg ${cls || ''}">${inner}</span>`;
   }
-  function counts(zone, id) {
-    const cs = S.cards.filter((c) => c.vec[zone] === id);
-    return { reply: cs.filter((c) => c.awaiting && !closed(c)).length, due: cs.filter(isDue).length };
+  // Counters: full words on vector rows, bare numbers (with a tooltip) inside the narrow zones.
+  function pills(n, short) {
+    const one = (cls, v, label) => (v ? `<span class="${cls}" title="${v} ${label}">${short ? v : v + ' ' + label}</span>` : '');
+    return one('c1', n.reply, t('toReply')) + one('c2', n.due, t('due'));
   }
-  function boardCards() {
-    const q = ui.q.trim().toLowerCase();
-    return S.cards.filter((c) => ZONES.every((z) => c.vec[z] === S.sel[z]))
-      .filter((c) => ui.ftype === 'all' || c.type === ui.ftype)
-      .filter((c) => !ui.fdue || isDue(c))
-      .filter((c) => !q || (c.title + ' ' + Object.values(c.f).join(' ')).toLowerCase().includes(q));
-  }
-  const selComplete = () => ZONES.every((z) => item(z, S.sel[z])) && item('direction', S.sel.direction).company === S.sel.company;
 
   // ---------- views ----------
   function top() {
     const tabs = ['vector', 'board', 'analytics', 'database'].map((v) =>
-      `<button class="tab ${S.view === v ? 'on' : ''}" data-act="view" data-v="${v}">${t(v)}</button>`).join('');
-    const crumb = S.view === 'board' ? ZONES.map((z) => esc((item(z, S.sel[z]) || {}).name || '—')).join(' › ') : '';
+      `<button class="tab ${S.view === v ? 'on' : ''}" data-act="view" data-v="${v}" ${v === 'board' && !activeVector() ? 'disabled' : ''}>${t(v)}</button>`).join('');
+    const av = activeVector();
+    const crumb = S.view === 'board' && av ? ZONES.map((z) => esc((item(z, av[z]) || {}).name || '—')).join(' › ') : '';
     return `<header class="top"><div class="logo"><span class="dot"></span>Sales-Co-pilot</div><nav>${tabs}</nav>
-      <div class="crumb">${crumb}</div>
+      <div class="crumb" title="${crumb}">${crumb}</div>
       <div class="right"><button class="lang" data-act="lang"><b class="${S.lang === 'en' ? 'on' : ''}">EN</b> <b class="${S.lang === 'uk' ? 'on' : ''}">UA</b></button></div></header>`;
   }
 
+  function chevron(v, opts) {
+    return ZONES.map((z, i) => {
+      const it = item(z, v[z]);
+      if (!it) return `<span class="seg empty" style="--i:${i}"><span class="sn">${i + 1} · ${t('zone_' + z)}</span></span>`;
+      const act = opts.draft ? `data-act="unpick" data-zone="${z}" title="${esc(it.name)} — ${t('clear')}"` : `title="${esc(it.name)}"`;
+      return `<span class="seg ${ui.popped === z && opts.draft ? 'pop' : ''}" style="--i:${i}" ${act}>${pic(z, it, 'sm')}<span class="sn">${esc(it.name)}</span></span>`;
+    }).join('');
+  }
+
   function vVector() {
-    const cols = ZONES.map((z, i) => {
-      const items = zoneItems(z).map((it) => {
-        const n = counts(z, it.id);
-        return `<button class="vi ${S.sel[z] === it.id ? 'sel' : ''}" data-act="pick" data-zone="${z}" data-id="${it.id}">
-          <span class="vn">${esc(it.name)}</span><span class="cnt">
-          <span class="c1 ${n.reply ? '' : 'z'}">${n.reply} ${t('toReply')}</span><span class="c2 ${n.due ? '' : 'z'}">${n.due} ${t('due')}</span></span></button>`;
-      }).join('') || `<p class="sub pad">${t('noDirections')}</p>`;
-      const adding = ui.adding === z
+    const rows = S.vectors.map((v) => {
+      const n = tally(S.cards.filter((c) => inVector(c, v)));
+      return `<div class="vrow ${ui.fresh === v.id ? 'fresh' : ''}">
+        <button class="chev" data-act="openVector" data-id="${v.id}">${chevron(v, {})}</button>
+        <span class="cnt">${pills(n)}</span>
+        <button class="btn sm" data-act="openVector" data-id="${v.id}">${t('openBoard')}</button>
+        <button class="dots" data-act="editVector" data-id="${v.id}" title="${t('edit')}">⋯</button></div>`;
+    }).join('') || `<p class="sub pad">${t('noVectors')}</p>`;
+
+    const zones = ZONES.map((z, i) => {
+      const list = z === 'direction' ? S.zones.direction.filter((d) => d.company === S.draft.company) : S.zones[z];
+      const items = list.map((it) => `<div class="pi ${S.draft[z] === it.id ? 'sel' : ''}" role="button" tabindex="0" data-act="pick" data-zone="${z}" data-id="${it.id}" title="${esc(it.name)}">
+          ${pic(z, it)}<span class="pn">${esc(it.name)}</span><span class="cnt">${pills(tally(S.cards.filter((c) => c.vec[z] === it.id)), true)}</span>
+          <button class="dots" data-act="editParam" data-zone="${z}" data-id="${it.id}" title="${t('edit')}">⋯</button></div>`).join('');
+      const hint = z === 'direction' && !S.draft.company ? `<p class="sub pad">${t('pickCompanyFirst')}</p>` : '';
+      const canAdd = z !== 'direction' || S.draft.company;
+      const adding = !canAdd ? '' : ui.adding === z
         ? `<input class="in addin" data-add="${z}" placeholder="${t('addNew')}" autofocus>`
         : `<button class="add" data-act="addItem" data-zone="${z}">${t('add')}</button>`;
-      return `<section class="vcol"><div class="vh">${i + 1} · ${t('zone_' + z)}</div>${items}${adding}</section>`;
+      return `<section class="zone"><div class="vh">${i + 1} · ${t('zone_' + z)}</div><div class="zlist">${items}${hint}${adding}</div></section>`;
     }).join('');
-    const co = item('company', S.sel.company);
-    const ok = selComplete();
-    return `<main class="body"><div class="headrow"><div><h1>${t('whereToday')}</h1><p class="sub">${t('whereSub')}</p></div>
-      <button class="btn ghost" data-act="wizOpen">${t('newVector')}</button></div>
-      <div class="vec">${cols}</div>
-      <div class="foot"><span class="mb">${co ? `${t('sendingAs')} <b>${esc(co.mailbox || '—')}</b> · ${t('signature')} “${esc(co.signature || co.name)}”` : ''}</span>
-      <span>${ok ? '' : `<span class="sub">${t('pickAll')}</span> `}<button class="btn" data-act="view" data-v="board" ${ok ? '' : 'disabled'}>${t('openBoard')}</button></span></div></main>`;
+
+    const ready = draftComplete(), dup = ready && sameVector(S.draft);
+    return `<main class="vscreen">
+      <section class="vtop"><div class="vhead"><h1>${t('vectorsTitle')}</h1><p class="sub">${t('vectorsSub')}</p></div><div class="vlist">${rows}</div></section>
+      <section class="vnew"><div class="builder"><div class="bl"><b>${t('newVectorTitle')}</b><span class="sub">${t('newVectorSub')}</span></div>
+        <div class="chev draft ${ready ? 'ready' : ''}">${chevron(S.draft, { draft: true })}</div>
+        <button class="btn" data-act="fixVector" ${ready && !dup ? '' : 'disabled'}>${dup ? t('vectorExists') : t('fixVector')}</button></div>
+        <div class="zones">${zones}</div></section></main>`;
   }
 
   function cardHtml(c) {
@@ -88,8 +108,12 @@
   }
 
   function vBoard() {
-    if (!selComplete()) { S.view = 'vector'; return vVector(); }
-    const cards = boardCards();
+    const av = activeVector();
+    if (!av) { S.view = 'vector'; return vVector(); }
+    const q = ui.q.trim().toLowerCase();
+    const cards = S.cards.filter((c) => inVector(c, av))
+      .filter((c) => ui.ftype === 'all' || c.type === ui.ftype).filter((c) => !ui.fdue || isDue(c))
+      .filter((c) => !q || (c.title + ' ' + Object.values(c.f).join(' ')).toLowerCase().includes(q));
     const chips = ['all'].concat(TYPES).map((x) =>
       `<button class="chip ${ui.ftype === x ? 'on' : ''}" data-act="ftype" data-v="${x}">${x === 'all' ? t('allTypes') : t('type_' + x)}</button>`).join('');
     const cols = STAGES.map(([s, color]) => {
@@ -113,7 +137,7 @@
   function tog(c, key, label) {
     return `<button class="tog" data-act="auto" data-k="${key}"><span class="sw ${c.auto[key] ? 'on' : ''}"><i></i></span><span>${label}</span></button>`;
   }
-  function vModal() {
+  function vCardModal() {
     const c = S.cards.find((x) => x.id === ui.open); if (!c) return '';
     const F = {
       contact: [['jobTitle', t('jobTitle')], ['company', t('company')], ['email', t('email')], ['phone', t('phone')], ['linkedin', t('linkedin')]],
@@ -145,23 +169,58 @@
       </div></div></div>`;
   }
 
-  function vWizard() {
-    const w = ui.wiz; if (!w) return '';
-    const z = ZONES[w.step];
-    const list = (z === 'direction' ? S.zones.direction.filter((d) => d.company === w.sel.company) : S.zones[z]);
-    const items = list.map((it) => `<button class="vi ${w.sel[z] === it.id ? 'sel' : ''}" data-act="wizPick" data-id="${it.id}"><span class="vn">${esc(it.name)}</span></button>`).join('');
-    return `<div class="overlay"><div class="modal wiz" role="dialog"><div class="wbody">
-      <div class="bh">${t('step')} ${w.step + 1} ${t('of')} 4</div><h2>${t('zone_' + z)}</h2><p class="sub">${t('chooseOrAdd')}</p>
-      <div class="wlist">${items}</div><input class="in" data-wizadd placeholder="${t('addNew')}">
-      <div class="acts"><button class="btn ghost sm" data-act="wizClose">${t('cancel')}</button>
-        ${w.step ? `<button class="btn ghost sm" data-act="wizBack">${t('back')}</button>` : ''}
-        <button class="btn sm" data-act="wizNext" ${w.sel[z] ? '' : 'disabled'}>${w.step === 3 ? t('finish') : t('next')}</button></div></div></div></div>`;
+  // Settings of one parameter (opened with the three dots).
+  const sIn = (it, k, label, area) => `<label class="fl"><span>${label}</span>${area
+    ? `<textarea class="in" data-s="${k}" rows="3">${esc(it.s[k] || '')}</textarea>` : `<input class="in" data-s="${k}" value="${esc(it.s[k] || '')}">`}</label>`;
+  const sSel = (it, k, label, vals, pre) => `<label class="fl"><span>${label}</span><select class="in" data-s="${k}"><option value=""></option>${
+    vals.map((v) => `<option value="${v}" ${it.s[k] === v ? 'selected' : ''}>${t(pre + v)}</option>`).join('')}</select></label>`;
+  function paramSettings(zone, it) {
+    if (zone === 'company') {
+      const boxes = (it.s.mailboxes || []).map((m, i) => `<div class="lrow"><button class="radio ${m.primary ? 'on' : ''}" data-act="mbPrimary" data-i="${i}" title="${t('primary')}"></button>
+        <span class="lt">${esc(m.email)}</span>${m.primary ? `<span class="ty">${t('primary')}</span>` : ''}<button class="link" data-act="mbRemove" data-i="${i}">×</button></div>`).join('');
+      return sIn(it, 'website', t('website')) + `<div class="fl"><span>${t('mailboxes')}</span>${boxes}<input class="in" data-listadd="mailboxes" placeholder="${t('addMailbox')}"></div>` + sIn(it, 'signature', t('signatureText'), 1);
+    }
+    if (zone === 'direction') {
+      const cr = (it.s.criteria || []).map((c, i) => `<div class="lrow"><span class="num">${i + 1}</span><span class="lt">${esc(c)}</span><button class="link" data-act="crRemove" data-i="${i}">×</button></div>`).join('');
+      return sIn(it, 'desc', t('dirDesc'), 1) + `<div class="fl"><span>${t('criteria')}</span>${cr}<input class="in" data-listadd="criteria" placeholder="${t('addCriterion')}"><p class="sub small">${t('criteriaNote')}</p></div>`;
+    }
+    if (zone === 'audience') {
+      const sen = SENIORITY.map((x) => `<button class="chip ${(it.s.seniority || []).includes(x) ? 'on' : ''}" data-act="senToggle" data-v="${x}">${x}</button>`).join('');
+      return sIn(it, 'titles', t('audTitles')) + `<div class="fl"><span>${t('audSeniority')}</span><div class="chips">${sen}</div></div>`
+        + `<div class="row2">${sSel(it, 'role', t('audRole'), ['decision', 'influence', 'user'], 'role_')}${sSel(it, 'tone', t('audTone'), ['formal', 'neutral', 'informal'], 'tone_')}</div>`
+        + `<div class="row2">${sIn(it, 'regions', t('audRegions'))}${sIn(it, 'language', t('audLanguage'))}</div>` + sIn(it, 'pains', t('audPains'), 1) + sIn(it, 'notes', t('audNotes'), 1);
+    }
+    return sIn(it, 'hook', t('topicHook'), 1) + sIn(it, 'keywords', t('topicKeywords')) + sIn(it, 'proof', t('topicProof'));
+  }
+  function vEditModal() {
+    const e = ui.edit; if (!e) return '';
+    let left, right;
+    if (e.kind === 'param') {
+      const it = item(e.zone, e.id); if (!it) return '';
+      const used = S.vectors.filter((v) => v[e.zone] === it.id).length;
+      left = `<div class="bh">${t('zone_' + e.zone)}</div><div class="imgrow"><div class="photo sq" tabindex="0" data-photo title="${t('imageHint')}">${pic(e.zone, it, 'xl')}</div>
+          <div><label class="btn ghost sm filebtn">${t('uploadImage')}<input type="file" accept="image/*" data-file hidden></label>
+          ${it.img ? ` <button class="btn ghost sm" data-act="rmImg">${t('removeImage')}</button>` : ''}<p class="sub small">${t('imageHint')}</p></div></div>
+        <label class="fl"><span>${t('name')}</span><input class="in big" data-pname value="${esc(it.name)}"></label>${paramSettings(e.zone, it)}`;
+      right = `<div class="box"><div class="bh">${t('access')}</div><p class="sub">${t('accessNote')}</p></div>
+        <div class="box"><div class="bh">${t('usedIn')}</div><b class="bigN">${used}</b></div>
+        <div class="acts"><button class="btn ghost sm danger" data-act="delParam" ${used ? 'disabled' : ''} title="${used ? t('cannotDelete') : ''}">${ui.delArm ? t('delSure') : t('del')}</button>
+        <button class="btn sm" data-act="closeEdit">${t('close')}</button></div>${used ? `<p class="sub small">${t('cannotDelete')}</p>` : ''}`;
+    } else {
+      const v = S.vectors.find((x) => x.id === e.id); if (!v) return '';
+      left = `<div class="bh">${t('vector')}</div><div class="chev stack">${chevron(v, {})}</div>
+        <div class="kvs">${ZONES.map((z) => `<div class="kv"><span>${t('zone_' + z)}</span><b>${esc((item(z, v[z]) || {}).name || '—')}</b></div>`).join('')}</div>`;
+      right = `<div class="box"><div class="bh">${t('owner')}</div><b>${t('you')}</b></div><div class="box"><div class="bh">${t('access')}</div><p class="sub">${t('accessNote')}</p></div>
+        <div class="box"><div class="bh">${t('vectorCards')}</div><b class="bigN">${S.cards.filter((c) => inVector(c, v)).length}</b></div>
+        <div class="acts"><button class="btn ghost sm danger" data-act="delVector">${ui.delArm ? t('delSure') : t('del')}</button><button class="btn sm" data-act="closeEdit">${t('close')}</button></div>`;
+    }
+    return `<div class="overlay" data-act="closeBg"><div class="modal" role="dialog"><div class="mleft">${left}</div><div class="mright">${right}</div></div></div>`;
   }
 
   function vAnalytics() {
     const contacts = S.cards.filter((c) => c.type === 'contact');
     const at = (cs, s) => cs.filter((c) => c.stage !== 'lost' && stageIdx(c.stage) >= stageIdx(s)).length;
-    const rate = (cs) => { const a = cs.filter((c) => c.stage !== 'new').length; return a ? Math.round(100 * at(cs.filter((c) => c.stage !== 'new'), 'replied') / a) : 0; };
+    const rate = (cs) => { const a = cs.filter((c) => c.stage !== 'new'); return a.length ? Math.round(100 * at(a, 'replied') / a.length) : 0; };
     const need = S.cards.filter((c) => (c.awaiting && !closed(c)) || isDue(c)).length;
     const kp = [[at(contacts, 'meeting'), t('kMeetings'), 1], [at(contacts, 'signed'), t('kSigned'), 1], [rate(contacts) + '%', t('kRate')], [need, t('kNeed')]]
       .map((k) => `<div class="kpi ${k[2] ? 'main' : ''}"><b>${k[0]}</b><span>${k[1]}</span></div>`).join('');
@@ -174,9 +233,9 @@
       return `<tr><td>${esc(it.name)}</td><td>${cs.filter((c) => c.stage !== 'new').length}</td><td>${at(cs, 'replied')}</td><td>${m}</td><td>${at(cs, 'signed')}</td>
         <td><span class="bar"><i style="width:${r}%"></i></span>${r}%</td></tr>`;
     }).join('');
-    const health = S.zones.company.map((c) => `<div class="mh2"><i></i><span><b>${esc(c.mailbox || c.name)}</b><br><small>${t('stageLater')}</small></span></div>`).join('');
+    const health = S.zones.company.map((c) => `<div class="mh2"><i></i><span><b>${esc(primaryMailbox(c) || c.name)}</b><br><small>${t('stageLater')}</small></span></div>`).join('');
     return `<main class="body"><div class="kpis">${kp}</div><div class="an">
-      <section class="box"><div class="bh">${t('effortBy')} <span class="seg">${seg}</span></div>
+      <section class="box"><div class="bh">${t('effortBy')} <span class="seg2">${seg}</span></div>
       <table><tr><th></th><th>${t('contacted')}</th><th>${t('replies')}</th><th>${t('meetings')}</th><th>${t('signed')}</th><th>${t('kRate')}</th></tr>${rows}</table>
       <p class="hint"><b>${t('bestVector')}:</b> ${best ? `${esc(best.name)} — ${best.m}` : t('noData')}</p></section>
       <section class="box"><div class="bh">${t('mailHealth')}</div>${health}<p class="sub small">${t('mailHealthNote')}</p></section></div></main>`;
@@ -205,20 +264,48 @@
     const html = view();
     document.documentElement.lang = S.lang === 'uk' ? 'uk' : 'en';
     document.getElementById('app').innerHTML = top() + html +
-      `<footer class="demo">${t('demo')} · <button class="link" data-act="reset">${t('reset')}</button></footer>` + vModal() + vWizard();
+      `<footer class="demo">${t('demo')} · <button class="link" data-act="reset">${t('reset')}</button></footer>` + vCardModal() + vEditModal();
     const af = document.querySelector('[autofocus]'); if (af) af.focus();
+    ui.fresh = null; ui.popped = null;
   }
   function commit() { save(); render(); }
 
   // ---------- actions ----------
+  const cur = () => S.cards.find((c) => c.id === ui.open);
+  const curParam = () => (ui.edit && ui.edit.kind === 'param' ? item(ui.edit.zone, ui.edit.id) : null);
   const A = {
     view(d) { S.view = d.v; ui.adding = null; commit(); },
     lang() { S.lang = S.lang === 'en' ? 'uk' : 'en'; commit(); },
     pick(d) {
-      S.sel[d.zone] = d.id;
-      if (d.zone === 'company') { const f = S.zones.direction.find((x) => x.company === d.id); S.sel.direction = f ? f.id : ''; }
+      if (S.draft[d.zone] === d.id) delete S.draft[d.zone]; else { S.draft[d.zone] = d.id; ui.popped = d.zone; }
+      if (d.zone === 'company') delete S.draft.direction;
       commit();
     },
+    unpick(d) { delete S.draft[d.zone]; if (d.zone === 'company') delete S.draft.direction; commit(); },
+    fixVector() {
+      if (!draftComplete() || sameVector(S.draft)) return;
+      const v = { id: uid('v'), owner: 'me' }; ZONES.forEach((z) => { v[z] = S.draft[z]; });
+      S.vectors.unshift(v); S.draft = {}; ui.fresh = v.id; commit();
+      const top = document.querySelector('.vtop'); if (top) top.scrollTop = 0;
+    },
+    openVector(d) { S.active = d.id; S.view = 'board'; ui.q = ''; commit(); },
+    editVector(d) { ui.edit = { kind: 'vector', id: d.id }; ui.delArm = false; render(); },
+    editParam(d) { ui.edit = { kind: 'param', zone: d.zone, id: d.id }; ui.delArm = false; render(); },
+    closeEdit() { ui.edit = null; render(); },
+    delVector() {
+      if (!ui.delArm) { ui.delArm = true; render(); return; }
+      S.vectors = S.vectors.filter((v) => v.id !== ui.edit.id); if (S.active === ui.edit.id) S.active = ''; ui.edit = null; commit();
+    },
+    delParam() {
+      if (!ui.delArm) { ui.delArm = true; render(); return; }
+      const e = ui.edit; S.zones[e.zone] = S.zones[e.zone].filter((x) => x.id !== e.id);
+      if (S.draft[e.zone] === e.id) delete S.draft[e.zone]; ui.edit = null; commit();
+    },
+    rmImg() { curParam().img = ''; commit(); },
+    mbPrimary(d) { curParam().s.mailboxes.forEach((m, i) => { m.primary = i === +d.i; }); commit(); },
+    mbRemove(d) { const m = curParam().s.mailboxes; m.splice(+d.i, 1); if (m.length && !m.some((x) => x.primary)) m[0].primary = true; commit(); },
+    crRemove(d) { curParam().s.criteria.splice(+d.i, 1); commit(); },
+    senToggle(d) { const s = curParam().s; s.seniority = s.seniority || []; const i = s.seniority.indexOf(d.v); if (i < 0) s.seniority.push(d.v); else s.seniority.splice(i, 1); commit(); },
     addItem(d) { ui.adding = d.zone; render(); },
     addCard(d) { ui.adding = 'st:' + d.stage; render(); },
     ftype(d) { ui.ftype = d.v; render(); },
@@ -227,7 +314,7 @@
     dbtab(d) { ui.dbtab = d.v; render(); },
     open(d) { ui.open = d.id; ui.delArm = false; render(); },
     close() { ui.open = null; render(); },
-    closeBg(d, e) { if (e.target.classList.contains('overlay')) A.close(); },
+    closeBg(d, e) { if (e.target.classList.contains('overlay')) { ui.open = null; ui.edit = null; render(); } },
     auto(d) { const c = cur(); c.auto[d.k] = !c.auto[d.k]; commit(); },
     awaiting() { const c = cur(); c.awaiting = !c.awaiting; commit(); },
     rmPhoto() { cur().photo = ''; commit(); },
@@ -240,53 +327,64 @@
       S.cards = S.cards.filter((c) => c.id !== ui.open); ui.open = null; commit();
     },
     rmDoc(d) { S.docs = S.docs.filter((x) => x.id !== d.id); commit(); },
-    reset() { S = demoState(); ui.open = null; commit(); },
-    wizOpen() { ui.wiz = { step: 0, sel: {} }; render(); },
-    wizClose() { ui.wiz = null; render(); },
-    wizPick(d) { const w = ui.wiz; w.sel[ZONES[w.step]] = d.id; if (w.step === 0) delete w.sel.direction; render(); },
-    wizBack() { ui.wiz.step--; render(); },
-    wizNext() {
-      const w = ui.wiz;
-      if (w.step < 3) { w.step++; render(); return; }
-      S.sel = { ...w.sel }; ui.wiz = null; S.view = 'board'; commit();
-    },
+    reset() { S = demoState(); ui.open = null; ui.edit = null; commit(); },
   };
-  const cur = () => S.cards.find((c) => c.id === ui.open);
 
-  function addZoneItem(zone, name, companyId) {
-    const it = { id: uid(zone[0]), name };
-    if (zone === 'company') { it.mailbox = ''; it.signature = name; }
-    if (zone === 'direction') it.company = companyId;
+  function newParam(zone, name) {
+    const it = { id: uid(zone[0]), name, img: '', s: {} };
+    if (zone === 'company') it.s = { website: '', signature: name, mailboxes: [] };
+    if (zone === 'direction') { it.company = S.draft.company; it.s = { desc: '', criteria: [] }; }
     S.zones[zone].push(it); return it;
+  }
+  // Store a pasted or uploaded picture, scaled down, on the open card or parameter.
+  function takeImage(file) {
+    const c = cur(), p = curParam(); if (!file || (!c && !p)) return;
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, 200 / Math.max(img.width, img.height)), cv = document.createElement('canvas');
+      cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      if (p) p.img = cv.toDataURL('image/png'); else c.photo = cv.toDataURL('image/jpeg', 0.85);
+      URL.revokeObjectURL(img.src); commit();
+    };
+    img.src = URL.createObjectURL(file);
   }
 
   document.addEventListener('click', (e) => {
-    const el = e.target.closest('[data-act]'); if (!el) return;
-    if (el.tagName === 'A') return;
+    const el = e.target.closest('[data-act]'); if (!el || el.tagName === 'A') return;
     const fn = A[el.dataset.act]; if (fn) fn(el.dataset, e);
   });
   document.addEventListener('keydown', (e) => {
     const el = e.target;
-    if (e.key === 'Escape') { if (ui.adding) { ui.adding = null; render(); } else if (ui.open) A.close(); else if (ui.wiz) A.wizClose(); return; }
-    if (e.key !== 'Enter' || !el.value || !el.value.trim()) return;
-    const v = el.value.trim();
+    if (e.key === 'Escape') {
+      if (ui.adding) { ui.adding = null; render(); } else if (ui.open || ui.edit) { ui.open = null; ui.edit = null; render(); }
+      return;
+    }
+    if (e.key !== 'Enter') return;
+    if (el.classList && el.classList.contains('pi')) { el.click(); return; }
+    if (!el.value || !el.value.trim() || el.tagName === 'TEXTAREA') return;
+    const v = el.value.trim(), p = curParam();
     if (el.dataset.add) {
-      const it = addZoneItem(el.dataset.add, v, S.sel.company); S.sel[el.dataset.add] = it.id;
-      if (el.dataset.add === 'company') S.sel.direction = '';
+      const z = el.dataset.add, it = newParam(z, v); S.draft[z] = it.id; ui.popped = z;
+      if (z === 'company') delete S.draft.direction;
       ui.adding = null; commit();
     } else if (el.dataset.addcard) {
-      S.cards.push({ id: uid('k'), type: 'task', stage: el.dataset.addcard, title: v, vec: { ...S.sel }, f: {}, next: { text: '', date: '' },
+      const av = activeVector(), vec = {}; ZONES.forEach((z) => { vec[z] = av[z]; });
+      S.cards.push({ id: uid('k'), type: 'task', stage: el.dataset.addcard, title: v, vec, f: {}, next: { text: '', date: '' },
         awaiting: false, auto: { follow: false, reply: false, notify: true, draft: true }, notes: '', photo: '' });
       commit();
-    } else if (el.hasAttribute('data-wizadd')) {
-      const w = ui.wiz, z = ZONES[w.step]; const it = addZoneItem(z, v, w.sel.company);
-      w.sel[z] = it.id; if (w.step === 0) delete w.sel.direction; commit();
+    } else if (el.dataset.listadd && p) {
+      const k = el.dataset.listadd; p.s[k] = p.s[k] || [];
+      p.s[k].push(k === 'mailboxes' ? { email: v, primary: !p.s[k].length } : v); commit();
+      const n = document.querySelector(`[data-listadd="${k}"]`); if (n) n.focus();
     }
   });
   // Field edits save without re-rendering, so typing is never interrupted.
   document.addEventListener('input', (e) => {
-    const el = e.target, c = cur();
+    const el = e.target, c = cur(), p = curParam();
     if (el.hasAttribute('data-search')) { ui.q = el.value; const pos = el.selectionStart; render(); const n = document.querySelector('[data-search]'); n.focus(); n.setSelectionRange(pos, pos); return; }
+    if (p && el.dataset.s) { p.s[el.dataset.s] = el.value; save(); return; }
+    if (p && el.hasAttribute('data-pname')) { p.name = el.value; save(); return; }
     if (!c) return;
     if (el.dataset.f) c.f[el.dataset.f] = el.value;
     else if (el.dataset.next) c.next[el.dataset.next] = el.value;
@@ -296,12 +394,13 @@
   });
   document.addEventListener('change', (e) => {
     const el = e.target, c = cur();
+    if (el.hasAttribute('data-file')) { takeImage(el.files[0]); return; }
     if (c && (el.dataset.top === 'type' || el.dataset.top === 'stage')) { c[el.dataset.top] = el.value; commit(); }
   });
   document.addEventListener('submit', (e) => {
     if (!e.target.hasAttribute('data-docform')) return;
-    e.preventDefault(); const f = new FormData(e.target);
-    S.docs.push({ id: uid('x'), title: f.get('title'), url: f.get('url'), priority: +f.get('priority'), company: S.sel.company }); commit();
+    e.preventDefault(); const f = new FormData(e.target), av = activeVector();
+    S.docs.push({ id: uid('x'), title: f.get('title'), url: f.get('url'), priority: +f.get('priority'), company: av ? av.company : '' }); commit();
   });
   // Drag a card to another stage.
   let drag = null;
@@ -313,18 +412,10 @@
     e.preventDefault(); const c = S.cards.find((x) => x.id === drag); drag = null;
     if (c) { c.stage = col.dataset.stage; commit(); }
   });
-  // Paste a photo into an open contact or company card.
   document.addEventListener('paste', (e) => {
-    const c = cur(); if (!c || !document.querySelector('[data-photo]')) return;
+    if (!document.querySelector('[data-photo]')) return;
     const f = [...(e.clipboardData ? e.clipboardData.files : [])].find((x) => x.type.startsWith('image/')); if (!f) return;
-    e.preventDefault(); const img = new Image();
-    img.onload = () => {
-      const k = Math.min(1, 200 / Math.max(img.width, img.height)), cv = document.createElement('canvas');
-      cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
-      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
-      c.photo = cv.toDataURL('image/jpeg', 0.85); URL.revokeObjectURL(img.src); commit();
-    };
-    img.src = URL.createObjectURL(f);
+    e.preventDefault(); takeImage(f);
   });
 
   render();
