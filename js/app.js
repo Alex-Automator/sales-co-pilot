@@ -105,7 +105,7 @@
     }).join('');
 
     const ready = draftComplete(), dup = ready && sameVector(S.draft);
-    const seed = CLOUD && ZONES.every((z) => !S.zones[z].length) ? `<div class="hello seed"><b>${t('seedTitle')}</b><button class="btn sm" data-act="seed">${t('seedBtn')}</button></div>` : '';
+    const seed = CLOUD && au.role === 'admin' && ZONES.every((z) => !S.zones[z].length) ? `<div class="hello seed"><b>${t('seedTitle')}</b><button class="btn sm" data-act="seed">${t('seedBtn')}</button></div>` : '';
     return `<main class="vscreen">
       <section class="vtop"><div class="vhead"><h1>${t('vectorsTitle')}</h1><p class="sub">${t('vectorsSub')}</p></div><div class="vlist">${rows}</div></section>
       <section class="vnew">${seed}<div class="builder"><div class="bl"><b>${t('newVectorTitle')}</b><span class="sub">${t('newVectorSub')}</span></div>
@@ -126,6 +126,8 @@
     const sub = c.type === 'contact' ? [c.f.jobTitle, c.f.company].filter(Boolean).join(' · ')
       : c.type === 'company' ? [c.f.country, c.f.website].filter(Boolean).join(' · ')
       : c.type === 'campaign' ? (c.f.dailyCap ? `${c.f.dailyCap} / day` : '') : (c.next.text || '');
+    const si = stageIdx(c.stage), prev = STAGES[si - 1], next = STAGES[si + 1];
+    const mv = `<div class="mv">${prev ? `<button data-act="moveCard" data-id="${c.id}" data-d="-1">‹ ${t('st_' + prev[0])}</button>` : '<span></span>'}${next ? `<button data-act="moveCard" data-id="${c.id}" data-d="1">${t('st_' + next[0])} ›</button>` : ''}</div>`;
     const lg = legendOf(c.color);
     const av = c.type === 'contact' || c.type === 'company'
       ? `<span class="cav">${c.photo ? `<img src="${c.photo}" alt="">` : esc(initials(c.type === 'contact' ? c.title : c.title))}</span>` : '';
@@ -133,7 +135,7 @@
     const tk = c.type !== 'task' ? '' : `<button class="tk ${c.done ? 'ok' : due && due < today() ? 'late' : due === today() ? 'now' : ''}" data-act="taskDone" data-id="${c.id}" title="${t('taskDone')}">${svg(c.done ? UI_ICONS.check : due ? UI_ICONS.clock : UI_ICONS.ring)}</button>`;
     return `<article class="card t-${c.type} ${c.done ? 'done' : ''}" draggable="true" data-card="${c.id}" data-act="open" data-id="${c.id}" style="border-left-color:${stageColor(c.stage)};${lg ? `--cc:${lg.color}` : ''}" ${lg ? `title="${esc(lg.label)}"` : ''}>
       <div class="ct"><span class="tyw"><span class="tyi">${svg(TYPE_ICONS[c.type])}</span><span class="ty">${t('type_' + c.type)}</span></span><span class="bd">${badges.join('')}</span></div>
-      <div class="crow">${av}<div><div class="cn">${esc(c.title) || '—'}</div>${sub ? `<div class="cs">${esc(sub)}</div>` : ''}</div></div>${tk}</article>`;
+      <div class="crow">${av}<div><div class="cn">${esc(c.title) || '—'}</div>${sub ? `<div class="cs">${esc(sub)}</div>` : ''}</div></div>${tk}${mv}</article>`;
   }
 
   function vBoard() {
@@ -160,7 +162,10 @@
     }).join('');
     return `<div class="tools"><input class="in search" data-search placeholder="${t('search')}" value="${esc(ui.q)}">${chips}
       <button class="chip ${ui.fdue ? 'on' : ''}" data-act="fdue">${t('dueToday')}</button>
-      <button class="btn sm" data-act="addCard" data-stage="new">${t('newCard')}</button></div><main class="board">${cols}</main>
+      <button class="btn sm" data-act="addCard" data-stage="new">${t('newCard')}</button></div>
+      <div class="bcrumb">${ZONES.map((z) => esc((item(z, av[z]) || {}).name || '—')).join(' › ')}</div>
+      <div class="stagebar">${STAGES.map(([st, color]) => `<button data-act="gotoStage" data-stage="${st}"><i style="background:${color}"></i>${t('st_' + st)} <b>${cards.filter((c) => c.stage === st).length}</b></button>`).join('')}</div>
+      <main class="board">${cols}</main>
       <div class="legend"><span class="ty">${t('colours')}</span>${legend}</div>`;
   }
 
@@ -183,9 +188,9 @@
     const hasPhoto = c.type === 'contact' || c.type === 'company';
     const logoText = c.type === 'contact' ? initials(c.f.company || c.title) : initials(c.title);
     const photo = hasPhoto ? `<div class="photo" tabindex="0" data-photo title="${t('photoHint')}">${c.photo ? `<img src="${c.photo}" alt="">` : esc(logoText)}</div>
-      <p class="sub small">${t('photoHint')}${c.photo ? ` · <button class="link" data-act="rmPhoto">${t('removePhoto')}</button>` : ''}</p>` : '';
+      <p class="sub small"><label class="link filebtn">${t('uploadImage')}<input type="file" accept="image/*" data-file hidden></label> · <span class="hint2">${t('photoHint')}</span>${c.photo ? ` · <button class="link" data-act="rmPhoto">${t('removePhoto')}</button>` : ''}</p>` : '';
     const opts = (list, cur, pre) => list.map((x) => `<option value="${x}" ${x === cur ? 'selected' : ''}>${t(pre + x)}</option>`).join('');
-    return `<div class="overlay" data-act="closeBg"><div class="modal" role="dialog">
+    return `<div class="overlay" data-act="closeBg"><div class="modal" role="dialog"><button class="mclose" data-act="closeAny" aria-label="Close">×</button>
       <div class="mleft">${photo}
         <label class="fl"><span>${c.type === 'contact' ? t('name') : t('title')}</span><input class="in big" data-top="title" value="${esc(c.title)}"></label>
         ${F.map((x) => field(c, x[0], x[1], x[2])).join('')}
@@ -239,7 +244,7 @@
       const rows = au.users.slice().sort((a, b) => (a.created || '').localeCompare(b.created || '')).map((u) => `<div class="urow"><span class="ava">${u.photo ? `<img src="${esc(u.photo)}" alt="" referrerpolicy="no-referrer">` : esc(initials(u.name || u.email))}</span>
         <span class="lt"><b>${esc(u.name || '—')}</b><br><small>${esc(u.email)}</small></span>
         <select class="in" data-urole="${u.id}" ${u.id === au.uid ? 'disabled' : ''}>${['pending', 'user', 'admin'].map((r) => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${t('acc_' + r)}</option>`).join('')}</select></div>`).join('');
-      return `<div class="overlay" data-act="closeBg"><div class="modal one" role="dialog"><div class="mleft"><div class="bh">${t('usersTitle')}</div><p class="sub">${t('usersNote')}</p>${rows}
+      return `<div class="overlay" data-act="closeBg"><div class="modal one" role="dialog"><button class="mclose" data-act="closeAny" aria-label="Close">×</button><div class="mleft"><div class="bh">${t('usersTitle')}</div><p class="sub">${t('usersNote')}</p>${rows}
         <div class="acts"><button class="btn sm" data-act="closeEdit">${t('close')}</button></div></div></div></div>`;
     }
     if (e.kind === 'profile') {
@@ -274,7 +279,7 @@
         <div class="box"><div class="bh">${t('vectorCards')}</div><b class="bigN">${S.cards.filter((c) => inVector(c, v)).length}</b></div>
         <div class="acts"><button class="btn ghost sm danger" data-act="delVector">${ui.delArm ? t('delSure') : t('del')}</button><button class="btn sm" data-act="closeEdit">${t('close')}</button></div>`;
     }
-    return `<div class="overlay" data-act="closeBg"><div class="modal" role="dialog"><div class="mleft">${left}</div><div class="mright">${right}</div></div></div>`;
+    return `<div class="overlay" data-act="closeBg"><div class="modal" role="dialog"><button class="mclose" data-act="closeAny" aria-label="Close">×</button><div class="mleft">${left}</div><div class="mright">${right}</div></div></div>`;
   }
 
   // ---------- widgets ----------
@@ -329,7 +334,7 @@
   function vWidgets() {
     const W = { analytics: [wAnalytics, 'wAnalytics'], calendar: [wCalendar, 'wCalendar'], important: [wImportant, 'wImportant'], mail: [wMail, 'wMail'] };
     return `<main class="body"><p class="sub dh">${t('dragHint')}</p><div class="wgrid">${S.widgets.filter((id) => W[id]).map((id) =>
-      `<section class="box widget w-${id}" data-widget="${id}"><div class="bh wh" draggable="true" data-wgrip="${id}"><span><span class="grip">⠿</span>${t(W[id][1])}</span></div>${W[id][0]()}</section>`).join('')}</div></main>`;
+      `<section class="box widget w-${id}" data-widget="${id}"><div class="bh wh" draggable="true" data-wgrip="${id}"><span><span class="grip">⠿</span>${t(W[id][1])}</span><span class="wmv"><button class="dots" data-act="wMove" data-id="${id}" data-d="-1">↑</button><button class="dots" data-act="wMove" data-id="${id}" data-d="1">↓</button></span></div>${W[id][0]()}</section>`).join('')}</div></main>`;
   }
 
   function vDatabase() {
@@ -401,10 +406,12 @@
     if (au.status !== 'in') { document.getElementById('app').innerHTML = vGate(); return; }
     const view = { vector: vVector, board: vBoard, analytics: vWidgets, database: vDatabase }[S.view] || vVector;
     const html = view();
+    const oldBoard = document.querySelector('.board'), keepX = oldBoard ? oldBoard.scrollLeft : 0;
     document.documentElement.lang = S.lang === 'uk' ? 'uk' : 'en';
     document.getElementById('app').innerHTML = top() + html +
       `<footer class="demo">VECTOR ${VERSION}${CLOUD ? ' · ' + esc(S.user.email) : ` · ${t('demo')} · <button class="link" data-act="reset">${t('reset')}</button>`}</footer>`
       + (ui.err ? `<div class="toast"><b>${t('saveErr')}</b><span>${esc(ui.err)}</span><button class="link" data-act="errClose">${t('dismiss')}</button></div>` : '') + vCardModal() + vEditModal() + vAI();
+    const nb = document.querySelector('.board'); if (nb && keepX) nb.scrollLeft = keepX;
     const af = document.querySelector('[autofocus]'); if (af) af.focus();
     ui.fresh = null; ui.popped = null;
   }
@@ -427,6 +434,9 @@
       S.cards.concat(S.gdocs).forEach((c) => { if (c.vid === v.id) c.acl = v.acl.slice(); });
       commit();
     },
+    moveCard(d) { const c = S.cards.find((x) => x.id === d.id), n = STAGES[stageIdx(c.stage) + +d.d]; if (n) { c.stage = n[0]; commit(); } },
+    gotoStage(d) { const col = document.querySelector(`.col[data-stage="${d.stage}"]`); if (col) col.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' }); },
+    wMove(d) { const i = S.widgets.indexOf(d.id), j = i + +d.d; if (i >= 0 && j >= 0 && j < S.widgets.length) { [S.widgets[i], S.widgets[j]] = [S.widgets[j], S.widgets[i]]; commit(); } },
     taskDone(d) { const c = S.cards.find((x) => x.id === d.id); c.done = !c.done; commit(); },
     calPrev() { ui.cal--; render(); },
     calNext() { ui.cal++; render(); },
@@ -491,6 +501,7 @@
     dbtab(d) { ui.dbtab = d.v; render(); },
     open(d) { ui.open = d.id; ui.delArm = false; render(); },
     close() { ui.open = null; render(); },
+    closeAny() { ui.open = null; ui.edit = null; render(); },
     closeBg(d, e) { if (e.target.classList.contains('overlay')) { ui.open = null; ui.edit = null; render(); } },
     auto(d) { const c = cur(); c.auto[d.k] = !c.auto[d.k]; commit(); },
     awaiting() { const c = cur(); c.awaiting = !c.awaiting; commit(); },
