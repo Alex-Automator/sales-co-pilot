@@ -442,7 +442,7 @@
     return `<main class="gate"><div class="gbox"><div class="logo">${MARK}<span class="bn"><b>VECTOR</b><small>Sales-co-pilot</small></span></div>${body}
       <button class="link" data-act="lang">EN / UA</button><div class="ver">${t('version')} ${VERSION}</div></div></main>`;
   }
-  const typing = () => { const a = document.activeElement; return !!a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName); };
+  const typing = () => { const a = document.activeElement; return !!a && /^(INPUT|TEXTAREA)$/.test(a.tagName); };
 
   function render() {
     if (au.status !== 'in') { document.getElementById('app').innerHTML = vGate(); return; }
@@ -632,7 +632,7 @@
   document.addEventListener('change', (e) => {
     const el = e.target, c = cur();
     if (el.hasAttribute('data-file')) { takeImage(el.files[0]); return; }
-    if (el.dataset.urole) { Cloud.setRole(el.dataset.urole, el.value); return; }
+    if (el.dataset.urole) { const u = au.users.find((x) => x.id === el.dataset.urole); if (u) u.role = el.value; Cloud.setRole(el.dataset.urole, el.value); render(); return; }
     if (el.dataset.cacc) {
       const [u, cid] = el.dataset.cacc.split('|'), co = item('company', cid); co.access = co.access || {};
       if (el.value) co.access[u] = el.value; else delete co.access[u];
