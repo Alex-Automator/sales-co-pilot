@@ -20,9 +20,33 @@ service cloud.firestore {
       allow update: if admin() || (uid == request.auth.uid && request.resource.data.role == resource.data.role);
       allow delete: if admin();
     }
-    // Parameters (companies, directions, audiences, topics), colour legend and document library are shared by the team.
-    match /params/{id} { allow read, write: if active(); }
+    // Parameters. Audiences and topics carry acl ['*'] and are shared by the team.
+    // Companies and their directions are visible only to people the admin gave access to.
+    function paramMine(d) { return '*' in d.acl || request.auth.uid in d.acl; }
+    match /params/{id} {
+      allow read: if admin() || (active() && paramMine(resource.data));
+      allow create: if admin() || (active() && paramMine(request.resource.data));
+      // An operator may edit a company's settings (their own mailboxes, for example) but not who has access to it.
+      allow update: if admin() || (active() && paramMine(resource.data)
+        && request.resource.data.acl == resource.data.acl
+        && request.resource.data.get('access', null) == resource.data.get('access', null));
+      allow delete: if admin() || (active() && paramMine(resource.data));
+    }
+    // Colour legend and document library.
     match /workspace/{id} { allow read, write: if active(); }
+    // Contacts the admin has closed for one person: that person can read the list, only the admin writes it.
+    match /guards/{uid} {
+      allow read: if admin() || (signedIn() && uid == request.auth.uid);
+      allow write: if admin();
+    }
+    // "Already in work" markers, one per contact email in a company. Anyone approved can check one exact
+    // email, but only its owner and the admin can list them, so the client base cannot be read through them.
+    match /taken/{id} {
+      allow get: if active();
+      allow list: if admin() || (active() && resource.data.owner == request.auth.uid);
+      allow create: if active() && request.resource.data.owner == request.auth.uid;
+      allow update, delete: if admin() || (active() && resource.data.owner == request.auth.uid);
+    }
 
     // A vector is visible to its owner, to people it was shared with (acl) and to the admin.
     match /vectors/{id} {

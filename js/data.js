@@ -43,7 +43,7 @@ function dayOffset(n) {
 // Empty state for the real program: everything comes from the server after sign-in.
 function emptyState() {
   return { v: 2, lang: 'en', view: 'vector', active: '', draft: {}, vectors: [], cards: [], docs: [], gdocs: [],
-    zones: { company: [], direction: [], audience: [], topic: [] }, legend: defaultLegend(),
+    zones: { company: [], direction: [], audience: [], topic: [] }, taken: [], legend: defaultLegend(),
     user: { name: '', email: '', photo: '' }, widgets: WIDGETS.slice(), guideSeen: false };
 }
 function demoState() {
@@ -54,7 +54,7 @@ function demoState() {
     auto: { follow: false, reply: false, notify: true, draft: true }, notes: '', photo: '',
   }, o);
   return {
-    v: 2, legend: defaultLegend(), user: defaultUser(), widgets: WIDGETS.slice(), gdocs: [], guideSeen: false, lang: 'en', view: 'vector', active: 'v1', draft: {},
+    v: 2, taken: [], legend: defaultLegend(), user: defaultUser(), widgets: WIDGETS.slice(), gdocs: [], guideSeen: false, lang: 'en', view: 'vector', active: 'v1', draft: {},
     vectors: [
       { id: 'v1', company: 'c1', direction: 'd1', audience: 'a1', topic: 't1', owner: 'me' },
       { id: 'v2', company: 'c3', direction: 'd4', audience: 'a3', topic: 't3', owner: 'me' },

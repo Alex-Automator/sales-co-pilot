@@ -348,3 +348,15 @@ p.later{padding:22px 8px;color:var(--mut)}
   .mclose{display:grid;place-items:center;position:fixed;top:10px;right:10px;width:40px;height:40px;border-radius:50%;background:var(--ink);color:var(--bg);font-size:22px;line-height:1;z-index:25}
   .hint2{display:none}
 }
+
+/* ---- company access, forbidden contacts, client base ---- */
+.blk{font-size:10px;padding:2px 6px;border-radius:9px;font-weight:700;white-space:nowrap;background:#C8473F;color:#fff}
+.blkbox{border-color:#C8473F;background:#FCECEA}.blkbox b{color:#C8473F}.blkbox p{margin-top:6px;line-height:1.45}
+.uacc{margin:0 0 6px 46px;padding:10px 12px;background:var(--panel);border-radius:10px}
+.uacc .lrow .in,.col2 .in{width:200px;flex:none;padding:6px 8px}
+.ownr{color:var(--mut);margin-left:6px}
+.search.wide{width:min(420px,100%);margin:12px 0 4px}
+.ctable .crowt{cursor:pointer}.ctable .crowt:hover{background:var(--panel)}
+.ctable td:first-child .tyi{vertical-align:-3px;margin-right:4px}
+.sdot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+@media (max-width:700px){.uacc{margin-left:0}.uacc .lrow,.col2{flex-wrap:wrap}.uacc .lrow .in,.col2 .in{width:100%}.ctable{display:block;overflow-x:auto;white-space:nowrap}}
