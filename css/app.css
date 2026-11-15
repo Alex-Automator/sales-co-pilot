@@ -278,3 +278,14 @@ p.later{padding:22px 8px;color:var(--mut)}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:12px 16px;border-radius:12px;display:flex;gap:12px;align-items:center;z-index:40;max-width:min(680px,92vw);font-size:13px}
 .toast .link{color:#fff}
 .tog:disabled{opacity:.6;cursor:default}
+
+/* One page width for the header and every screen, so they line up on wide monitors. */
+:root{--pad:max(22px,calc((100vw - 1640px)/2))}
+.top,.tools,.legend,.demo{padding-left:var(--pad);padding-right:var(--pad)}
+.board{padding-left:var(--pad);padding-right:var(--pad)}
+.vscreen{max-width:none;padding:22px var(--pad) 0}
+.body{max-width:none;padding:26px var(--pad)}
+.tools.flat{padding-left:0;padding-right:0}
+@media (max-width:900px){:root{--pad:14px}.vscreen{padding:16px var(--pad)}.body{padding:18px var(--pad)}.board{grid-template-columns:repeat(8,78vw)}.aipanel{width:100vw}.modal{grid-template-columns:1fr}}
+@media (max-width:900px){.aipanel{top:0;z-index:19}}
+@media (max-width:700px){.zones{grid-template-columns:1fr;row-gap:20px}.zone{border-left:0;padding:0}.vrow .cnt{min-width:0}}
