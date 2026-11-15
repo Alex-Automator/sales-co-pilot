@@ -1,4 +1,4 @@
-# Sales-Co-pilot
+# VECTOR — Sales-co-pilot
 
 Web app for finding B2B clients, contacting them and tracking how effective those contacts are.
 Built for ODDIN, INDUSTRIT and BidPlan Partner.
@@ -28,7 +28,7 @@ See [docs/SPEC.md](docs/SPEC.md) for the agreed scope and stages.
 
 ```
 index.html      page shell
-css/app.css     styles (variant B: warm paper, terracotta accent)
+css/app.css     styles (graphite and cool greys, terracotta accent)
 js/i18n.js      interface texts EN / UA
 js/data.js      stages, card types, demo data
 js/app.js       screens and actions
