@@ -265,3 +265,16 @@ p.later{padding:22px 8px;color:var(--mut)}
 
 .bn{line-height:1}.bn b{display:block;font-size:16px;letter-spacing:2px;font-weight:800}
 .bn small{display:block;font-size:10.5px;color:var(--mut);font-weight:500;margin-top:3px;letter-spacing:.2px}
+
+/* ---- sign-in, users, server errors ---- */
+.gate{flex:1;display:grid;place-items:center;padding:24px;min-height:100vh}
+.gbox{width:min(400px,100%);border:1px solid var(--line);border-radius:16px;padding:32px;display:flex;flex-direction:column;gap:16px;align-items:flex-start;line-height:1.5}
+.gbox .btn{width:100%}.gbox .ver{padding:0}.gbox .mark{width:34px;height:25px}.gbox .bn b{font-size:20px}
+.err{color:#C8473F;font-size:13px}
+.modal.one{display:block;width:min(560px,100%)}
+.urow{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--line)}.urow .in{width:190px;flex:none}.urow small{color:var(--mut)}
+.urow:first-of-type{margin-top:14px}
+.hello.seed{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:12px 16px;border-radius:12px;display:flex;gap:12px;align-items:center;z-index:40;max-width:min(680px,92vw);font-size:13px}
+.toast .link{color:#fff}
+.tog:disabled{opacity:.6;cursor:default}

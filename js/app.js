@@ -1,15 +1,22 @@
 // VECTOR (Sales-co-pilot) 0.1: interface on demo data, saved in the browser.
 // No sign-in, mail, Sheets or AI yet: those arrive in later stages (see docs/SPEC.md).
 (function () {
-  const KEY = 'sales-co-pilot-v2';
+  const KEY = 'sales-co-pilot-v2', PKEY = 'vector-prefs-v1';
+  // With Firebase loaded the program is real: sign-in and shared data. Without it (the preview) it runs on demo data.
+  const CLOUD = !!(window.firebase && window.FIREBASE_CONFIG);
+  const PREFS = ['lang', 'view', 'active', 'draft', 'widgets', 'guideSeen'];
+  const au = { status: CLOUD ? 'loading' : 'in', uid: 'me', role: 'admin', users: [], err: '' };
   let S = load();
   let ui = { open: null, edit: null, q: '', ftype: 'all', fdue: false, zone: 'company', dbtab: 'library', delArm: false, adding: null, fresh: null, popped: null, menu: null, legendEdit: false, fcolor: '', cal: 0, ai: !S.guideSeen, aiView: 'home', aiLog: [] };
 
   function load() {
+    if (CLOUD) { const s = emptyState(); try { Object.assign(s, JSON.parse(localStorage.getItem(PKEY)) || {}); } catch (e) {} return s; }
     try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.v === 2) { s.legend = s.legend || defaultLegend(); s.user = s.user || defaultUser(); s.widgets = s.widgets || WIDGETS.slice(); s.gdocs = s.gdocs || []; return s; } } catch (e) {}
     return demoState();
   }
-  function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+  function save() {
+    if (CLOUD) { try { const p = {}; PREFS.forEach((k) => { p[k] = S[k]; }); localStorage.setItem(PKEY, JSON.stringify(p)); } catch (e) {} Cloud.schedule(); return; }
+    try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
   const t = (k) => (I18N[S.lang] && I18N[S.lang][k]) || I18N.en[k] || k;
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const uid = (p) => p + Math.random().toString(36).slice(2, 9);
@@ -19,13 +26,15 @@
   const item = (zone, id) => S.zones[zone].find((x) => x.id === id);
   const closed = (c) => c.stage === 'signed' || c.stage === 'lost' || !!c.done;
   // Everything the operator sees in widgets and in AI answers is limited to their own vectors.
-  const myVectors = () => S.vectors.filter((v) => !v.owner || v.owner === 'me');
-  const myCards = () => { const vs = myVectors(); return S.cards.filter((c) => vs.some((v) => ZONES.every((z) => c.vec[z] === v[z]))); };
+  const myVectors = () => S.vectors;
+  const myCards = () => { const vs = myVectors(); return S.cards.filter((c) => vs.some((v) => c.vid === v.id)); };
+  const userName = (id) => { const u = au.users.find((x) => x.id === id); return u ? u.name || u.email : id === au.uid ? t('you') : '—'; };
+  const ord = (a, b) => (a.ord || 0) - (b.ord || 0);
   const cardSub = (c) => (c.type === 'contact' ? [c.f.jobTitle, c.f.company].filter(Boolean).join(' · ') : c.next.text || '');
   const isDue = (c) => c.next && c.next.date && c.next.date <= today() && !closed(c);
   const initials = (s) => String(s || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
   const activeVector = () => S.vectors.find((v) => v.id === S.active);
-  const inVector = (c, v) => ZONES.every((z) => c.vec[z] === v[z]);
+  const inVector = (c, v) => c.vid === v.id;
   const tally = (cs) => ({ reply: cs.filter((c) => c.awaiting && !closed(c)).length, due: cs.filter(isDue).length });
   const primaryMailbox = (co) => { const m = (co && co.s.mailboxes) || []; return (m.find((x) => x.primary) || m[0] || {}).email || ''; };
   const draftComplete = () => ZONES.every((z) => item(z, S.draft[z]));
@@ -52,15 +61,15 @@
       `<button class="tab ${S.view === v ? 'on' : ''}" data-act="view" data-v="${v}" ${v === 'board' && !activeVector() ? 'disabled' : ''}>${t(v)}</button>`).join('');
     const av = activeVector();
     const crumb = S.view === 'board' && av ? ZONES.map((z) => esc((item(z, av[z]) || {}).name || '—')).join(' › ') : '';
-    const u = S.user, ava = u.photo ? `<img src="${u.photo}" alt="">` : esc(initials(u.name));
+    const u = S.user, ava = u.photo ? `<img src="${esc(u.photo)}" alt="" referrerpolicy="no-referrer">` : esc(initials(u.name));
     const langX = `<b class="${S.lang === 'en' ? 'on' : ''}">EN</b> / <b class="${S.lang === 'uk' ? 'on' : ''}">UA</b>`;
     const later = (n) => `${t('stage')} ${n}`;
     return `<header class="top"><div class="brand" tabindex="0"><div class="logo"><svg class="mark" viewBox="0 0 30 22"><path d="M0 0h7l7 11-7 11H0l7-11z" opacity=".45"/><path d="M11 0h9l10 11-10 11h-9l8-11z"/></svg><span class="bn"><b>VECTOR</b><small>Sales-co-pilot</small></span><span class="car">▾</span></div>
         <div class="menu"><div class="mh">${t('appSettings')}</div>${mi('lang', t('setLanguage'), langX)}${mi('legendOpen', t('setColors'), '', !activeVector())}
-        ${mi('', t('setUsers'), later(2), 1)}${mi('', t('setMail'), later(3), 1)}${mi('', t('setAI'), later(4), 1)}<hr>${mi('reset', t('reset'))}<div class="ver">${t('version')} ${VERSION}</div></div></div>
+        ${CLOUD ? mi('usersOpen', t('setUsers'), '', au.role !== 'admin') : mi('', t('setUsers'), later(2), 1)}${mi('', t('setMail'), later(3), 1)}${mi('', t('setAI'), later(4), 1)}${CLOUD ? '' : `<hr>${mi('reset', t('reset'))}`}<div class="ver">${t('version')} ${VERSION}</div></div></div>
       <nav>${tabs}</nav><div class="crumb" title="${crumb}">${crumb}</div>
       <div class="right"><button class="aibtn ${ui.ai ? 'on' : ''}" data-act="aiToggle">${svg(UI_ICONS.spark)}<span>${t('aiHelper')}</span></button><button class="userbtn" data-act="userMenu"><span class="un"><b>${esc(u.name)}</b><small>${esc(u.email)}</small></span><span class="ava">${ava}</span></button>
-        ${ui.menu === 'user' ? `<div class="menu show"><div class="mh">${esc(u.email)}</div>${mi('editProfile', t('myProfile'))}${mi('lang', t('setLanguage'), langX)}<hr>${mi('', t('signOut'), later(2), 1)}</div>` : ''}</div></header>`;
+        ${ui.menu === 'user' ? `<div class="menu show"><div class="mh">${esc(u.email)}${CLOUD ? ' · ' + t('acc_' + au.role) : ''}</div>${CLOUD ? '' : mi('editProfile', t('myProfile'))}${mi('lang', t('setLanguage'), langX)}<hr>${CLOUD ? mi('signOut', t('signOut')) : mi('', t('signOut'), later(2), 1)}</div>` : ''}</div></header>`;
   }
 
   function chevron(v, opts) {
@@ -96,9 +105,10 @@
     }).join('');
 
     const ready = draftComplete(), dup = ready && sameVector(S.draft);
+    const seed = CLOUD && ZONES.every((z) => !S.zones[z].length) ? `<div class="hello seed"><b>${t('seedTitle')}</b><button class="btn sm" data-act="seed">${t('seedBtn')}</button></div>` : '';
     return `<main class="vscreen">
       <section class="vtop"><div class="vhead"><h1>${t('vectorsTitle')}</h1><p class="sub">${t('vectorsSub')}</p></div><div class="vlist">${rows}</div></section>
-      <section class="vnew"><div class="builder"><div class="bl"><b>${t('newVectorTitle')}</b><span class="sub">${t('newVectorSub')}</span></div>
+      <section class="vnew">${seed}<div class="builder"><div class="bl"><b>${t('newVectorTitle')}</b><span class="sub">${t('newVectorSub')}</span></div>
         <div class="chev draft ${ready ? 'ready' : ''}">${chevron(S.draft, { draft: true })}</div>
         <button class="btn" data-act="fixVector" ${ready && !dup ? '' : 'disabled'}>${dup ? t('vectorExists') : t('fixVector')}</button></div>
         <div class="zones">${zones}</div></section></main>`;
@@ -225,6 +235,13 @@
   function vEditModal() {
     const e = ui.edit; if (!e) return '';
     let left, right;
+    if (e.kind === 'users') {
+      const rows = au.users.slice().sort((a, b) => (a.created || '').localeCompare(b.created || '')).map((u) => `<div class="urow"><span class="ava">${u.photo ? `<img src="${esc(u.photo)}" alt="" referrerpolicy="no-referrer">` : esc(initials(u.name || u.email))}</span>
+        <span class="lt"><b>${esc(u.name || '—')}</b><br><small>${esc(u.email)}</small></span>
+        <select class="in" data-urole="${u.id}" ${u.id === au.uid ? 'disabled' : ''}>${['pending', 'user', 'admin'].map((r) => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${t('acc_' + r)}</option>`).join('')}</select></div>`).join('');
+      return `<div class="overlay" data-act="closeBg"><div class="modal one" role="dialog"><div class="mleft"><div class="bh">${t('usersTitle')}</div><p class="sub">${t('usersNote')}</p>${rows}
+        <div class="acts"><button class="btn sm" data-act="closeEdit">${t('close')}</button></div></div></div></div>`;
+    }
     if (e.kind === 'profile') {
       const u = S.user;
       left = `<div class="bh">${t('profile')}</div><div class="imgrow"><div class="photo" tabindex="0" data-photo>${u.photo ? `<img src="${u.photo}" alt="">` : esc(initials(u.name))}</div>
@@ -249,7 +266,11 @@
       const v = S.vectors.find((x) => x.id === e.id); if (!v) return '';
       left = `<div class="bh">${t('vector')}</div><div class="chev stack">${chevron(v, {})}</div>
         <div class="kvs">${ZONES.map((z) => `<div class="kv"><span>${t('zone_' + z)}</span><b>${esc((item(z, v[z]) || {}).name || '—')}</b></div>`).join('')}</div>`;
-      right = `<div class="box"><div class="bh">${t('owner')}</div><b>${t('you')}</b></div><div class="box"><div class="bh">${t('access')}</div><p class="sub">${t('accessNote')}</p></div>
+      const canShare = au.role === 'admin' || v.owner === au.uid;
+      const others = au.users.filter((u) => u.id !== v.owner && (u.role === 'admin' || u.role === 'user'));
+      const share = !CLOUD ? `<p class="sub">${t('accessNote')}</p>` : (others.map((u) => `<button class="tog" data-act="vecMember" data-uid="${u.id}" ${canShare ? '' : 'disabled'}><span class="sw ${(v.members || []).includes(u.id) || u.role === 'admin' ? 'on' : ''}"><i></i></span><span>${esc(u.name || u.email)}${u.role === 'admin' ? ' · ' + t('acc_admin') : ''}</span></button>`).join('') || `<p class="sub">${t('noOthers')}</p>`)
+        + (canShare ? '' : `<p class="sub small">${t('onlyOwner')}</p>`);
+      right = `<div class="box"><div class="bh">${t('owner')}</div><b>${CLOUD ? esc(userName(v.owner)) : t('you')}</b></div><div class="box"><div class="bh">${CLOUD ? t('sharedWith') : t('access')}</div>${share}</div>
         <div class="box"><div class="bh">${t('vectorCards')}</div><b class="bigN">${S.cards.filter((c) => inVector(c, v)).length}</b></div>
         <div class="acts"><button class="btn ghost sm danger" data-act="delVector">${ui.delArm ? t('delSure') : t('del')}</button><button class="btn sm" data-act="closeEdit">${t('close')}</button></div>`;
     }
@@ -366,12 +387,24 @@
       <div class="aibody">${body}</div><div class="aifoot"><input class="in" disabled placeholder="${t('aiSoon')}"></div></aside>`;
   }
 
+  const MARK = '<svg class="mark" viewBox="0 0 30 22"><path d="M0 0h7l7 11-7 11H0l7-11z" opacity=".45"/><path d="M11 0h9l10 11-10 11h-9l8-11z"/></svg>';
+  function vGate() {
+    const body = au.status === 'loading' ? `<p class="sub">${t('loading')}</p>`
+      : au.status === 'pending' ? `<h2>${t('gatePending')}</h2><p class="sub">${esc(S.user.email)}</p><p>${t('gatePendingSub')}</p><button class="btn ghost" data-act="signOut">${t('signOut')}</button>`
+      : `<p>${t('gateSub')}</p><button class="btn" data-act="signIn">${t('gateSignIn')}</button>${au.err ? `<p class="err">${esc(au.err)}</p>` : ''}`;
+    return `<main class="gate"><div class="gbox"><div class="logo">${MARK}<span class="bn"><b>VECTOR</b><small>Sales-co-pilot</small></span></div>${body}
+      <button class="link" data-act="lang">EN / UA</button><div class="ver">${t('version')} ${VERSION}</div></div></main>`;
+  }
+  const typing = () => { const a = document.activeElement; return !!a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName); };
+
   function render() {
+    if (au.status !== 'in') { document.getElementById('app').innerHTML = vGate(); return; }
     const view = { vector: vVector, board: vBoard, analytics: vWidgets, database: vDatabase }[S.view] || vVector;
     const html = view();
     document.documentElement.lang = S.lang === 'uk' ? 'uk' : 'en';
     document.getElementById('app').innerHTML = top() + html +
-      `<footer class="demo">VECTOR ${VERSION} · ${t('demo')} · <button class="link" data-act="reset">${t('reset')}</button></footer>` + vCardModal() + vEditModal() + vAI();
+      `<footer class="demo">VECTOR ${VERSION}${CLOUD ? ' · ' + esc(S.user.email) : ` · ${t('demo')} · <button class="link" data-act="reset">${t('reset')}</button>`}</footer>`
+      + (ui.err ? `<div class="toast"><b>${t('saveErr')}</b><span>${esc(ui.err)}</span><button class="link" data-act="errClose">${t('dismiss')}</button></div>` : '') + vCardModal() + vEditModal() + vAI();
     const af = document.querySelector('[autofocus]'); if (af) af.focus();
     ui.fresh = null; ui.popped = null;
   }
@@ -382,6 +415,18 @@
   const curParam = () => (ui.edit && ui.edit.kind === 'param' ? item(ui.edit.zone, ui.edit.id) : null);
   const A = {
     view(d) { S.view = d.v; ui.adding = null; commit(); },
+    signIn() { au.err = ''; Cloud.signIn(); },
+    signOut() { ui.menu = null; Cloud.signOut(); },
+    usersOpen() { ui.edit = { kind: 'users' }; render(); },
+    errClose() { ui.err = ''; render(); },
+    seed() { S.zones = demoState().zones; let n = 0; ZONES.forEach((z) => S.zones[z].forEach((it) => { it.ord = ++n; if (z === 'company') it.s.mailboxes = []; })); commit(); },
+    vecMember(d) {
+      const v = S.vectors.find((x) => x.id === ui.edit.id); v.members = v.members || [];
+      const i = v.members.indexOf(d.uid); if (i < 0) v.members.push(d.uid); else v.members.splice(i, 1);
+      v.acl = [v.owner].concat(v.members);
+      S.cards.concat(S.gdocs).forEach((c) => { if (c.vid === v.id) c.acl = v.acl.slice(); });
+      commit();
+    },
     taskDone(d) { const c = S.cards.find((x) => x.id === d.id); c.done = !c.done; commit(); },
     calPrev() { ui.cal--; render(); },
     calNext() { ui.cal++; render(); },
@@ -392,7 +437,7 @@
     aiAsk(d) { ui.aiLog.push(d.q); render(); const l = document.querySelector('.aibody'); if (l) l.scrollTop = l.scrollHeight; },
     prepDoc() {
       const c = cur(), sel = document.querySelector('[data-doctype]');
-      S.gdocs.push({ id: uid('g'), no: 'D-' + String(S.gdocs.length + 1).padStart(4, '0'), type: sel.value, card: c.id,
+      S.gdocs.push({ id: uid('g'), vid: c.vid, acl: (c.acl || []).slice(), ord: Date.now(), no: 'D-' + String(S.gdocs.length + 1).padStart(4, '0'), type: sel.value, card: c.id,
         client: c.type === 'contact' ? [c.title, c.f.company].filter(Boolean).join(', ') : c.title, date: today() });
       commit();
     },
@@ -416,7 +461,7 @@
     unpick(d) { delete S.draft[d.zone]; if (d.zone === 'company') delete S.draft.direction; commit(); },
     fixVector() {
       if (!draftComplete() || sameVector(S.draft)) return;
-      const v = { id: uid('v'), owner: 'me' }; ZONES.forEach((z) => { v[z] = S.draft[z]; });
+      const v = { id: uid('v'), owner: au.uid, members: [], acl: [au.uid], ord: Date.now() }; ZONES.forEach((z) => { v[z] = S.draft[z]; });
       S.vectors.unshift(v); S.draft = {}; ui.fresh = v.id; commit();
       const top = document.querySelector('.vtop'); if (top) top.scrollTop = 0;
     },
@@ -426,7 +471,7 @@
     closeEdit() { ui.edit = null; render(); },
     delVector() {
       if (!ui.delArm) { ui.delArm = true; render(); return; }
-      S.vectors = S.vectors.filter((v) => v.id !== ui.edit.id); if (S.active === ui.edit.id) S.active = ''; ui.edit = null; commit();
+      const gone = ui.edit.id; S.vectors = S.vectors.filter((v) => v.id !== gone); S.cards = S.cards.filter((c) => c.vid !== gone); S.gdocs = S.gdocs.filter((g) => g.vid !== gone); if (S.active === gone) S.active = ''; ui.edit = null; commit();
     },
     delParam() {
       if (!ui.delArm) { ui.delArm = true; render(); return; }
@@ -452,7 +497,7 @@
     rmPhoto() { cur().photo = ''; commit(); },
     clone() {
       const c = cur(); const n = JSON.parse(JSON.stringify(c));
-      n.id = uid('k'); n.title = c.title + ' (2)'; S.cards.push(n); ui.open = n.id; commit();
+      n.id = uid('k'); n.ord = Date.now(); n.title = c.title + ' (2)'; S.cards.push(n); ui.open = n.id; commit();
     },
     del() {
       if (!ui.delArm) { ui.delArm = true; render(); return; }
@@ -463,7 +508,7 @@
   };
 
   function newParam(zone, name) {
-    const it = { id: uid(zone[0]), name, img: '', s: {} };
+    const it = { id: uid(zone[0]), name, img: '', s: {}, ord: Date.now() };
     if (zone === 'company') it.s = { website: '', signature: name, mailboxes: [] };
     if (zone === 'direction') { it.company = S.draft.company; it.s = { desc: '', criteria: [] }; }
     S.zones[zone].push(it); return it;
@@ -504,7 +549,7 @@
       ui.adding = null; commit();
     } else if (el.dataset.addcard) {
       const av = activeVector(), vec = {}; ZONES.forEach((z) => { vec[z] = av[z]; });
-      S.cards.push({ id: uid('k'), type: 'task', stage: el.dataset.addcard, title: v, vec, f: {}, next: { text: '', date: '' },
+      S.cards.push({ id: uid('k'), vid: av.id, acl: (av.acl || []).slice(), ord: Date.now(), type: 'task', stage: el.dataset.addcard, title: v, vec, f: {}, next: { text: '', date: '' },
         awaiting: false, auto: { follow: false, reply: false, notify: true, draft: true }, notes: '', photo: '' });
       commit();
     } else if (el.dataset.listadd && p) {
@@ -532,6 +577,7 @@
   document.addEventListener('change', (e) => {
     const el = e.target, c = cur();
     if (el.hasAttribute('data-file')) { takeImage(el.files[0]); return; }
+    if (el.dataset.urole) { Cloud.setRole(el.dataset.urole, el.value); return; }
     if (c && (el.dataset.top === 'type' || el.dataset.top === 'stage')) { c[el.dataset.top] = el.value; commit(); }
   });
   document.addEventListener('submit', (e) => {
@@ -567,5 +613,32 @@
     e.preventDefault(); takeImage(f);
   });
 
+  if (CLOUD) {
+    Cloud.init(window.FIREBASE_CONFIG, {
+      auth(a) {
+        Object.assign(au, { err: '' }, a);
+        if (a.user) S.user = { name: a.user.name || '', email: a.user.email || '', photo: a.user.photo || '' };
+        if (a.status !== 'in') { au.users = []; ui.open = null; ui.edit = null; } else { S.view = 'vector'; S.draft = {}; }
+        render();
+      },
+      // Server data replaces the matching part of the state; the screen is not redrawn under someone who is typing.
+      data(name, d) {
+        if (name === 'params') ZONES.forEach((z) => { S.zones[z] = d.filter((p) => p.zone === z).sort(ord); });
+        else if (name === 'vectors') S.vectors = d.sort((a, b) => ord(b, a));
+        else if (name === 'cards') S.cards = d.sort(ord);
+        else if (name === 'gdocs') S.gdocs = d.sort(ord);
+        else if (name === 'users') au.users = d;
+        else if (name === 'workspace') { S.legend = (d && d.legend) || S.legend; S.docs = (d && d.docs) || []; }
+        if (!typing()) render();
+      },
+      collect() {
+        const out = { params: {}, vectors: {}, cards: {}, gdocs: {}, workspace: { shared: { legend: S.legend, docs: S.docs } } };
+        ZONES.forEach((z) => S.zones[z].forEach((it) => { out.params[it.id] = Object.assign({}, it, { zone: z }); }));
+        S.vectors.forEach((v) => { out.vectors[v.id] = v; }); S.cards.forEach((c) => { out.cards[c.id] = c; }); S.gdocs.forEach((g) => { out.gdocs[g.id] = g; });
+        return out;
+      },
+      error(e) { ui.err = e && e.message ? e.message : String(e); render(); },
+    });
+  }
   render();
 })();

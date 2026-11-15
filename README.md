@@ -5,9 +5,14 @@ Built for ODDIN, INDUSTRIT and BidPlan Partner.
 
 **Status: version 0.1** — the interface on demo data. Nothing is sent anywhere; data is saved only in the browser.
 
-## Try it
+## Run it
 
-Open `index.html` in a browser. No install or build step.
+The program is a static site: `index.html` plus `css/` and `js/`, no build step.
+
+- **Real mode** (when the Firebase scripts load): sign-in with Google, shared data in Firestore project `vector-sales-co-pilot`.
+  The first person to sign in becomes the admin and approves everyone else under *Program settings → Users and access*.
+  Publish `firestore.rules` in the Firebase console (Firestore → Rules) and add the site's domain under Authentication → Settings → Authorized domains.
+- **Demo mode** (`python3 scripts/bundle.py` builds a single `preview.html` without Firebase): demo data kept in the browser.
 
 ## What works in revision 1
 

@@ -1,0 +1,42 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function userPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function active() { return signedIn() && exists(userPath()) && get(userPath()).data.role in ['admin', 'user']; }
+    function admin() { return signedIn() && exists(userPath()) && get(userPath()).data.role == 'admin'; }
+
+    // The first person to sign in claims the admin seat; it can never be changed from the app.
+    match /meta/app {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.adminUid == request.auth.uid;
+    }
+    match /users/{uid} {
+      allow read: if signedIn() && (uid == request.auth.uid || active());
+      allow create: if signedIn() && uid == request.auth.uid
+        && (request.resource.data.role == 'pending'
+          || (request.resource.data.role == 'admin'
+            && get(/databases/$(database)/documents/meta/app).data.adminUid == request.auth.uid));
+      allow update: if admin() || (uid == request.auth.uid && request.resource.data.role == resource.data.role);
+      allow delete: if admin();
+    }
+    // Parameters (companies, directions, audiences, topics), colour legend and document library are shared by the team.
+    match /params/{id} { allow read, write: if active(); }
+    match /workspace/{id} { allow read, write: if active(); }
+
+    // A vector is visible to its owner, to people it was shared with (acl) and to the admin.
+    match /vectors/{id} {
+      allow read: if admin() || (active() && request.auth.uid in resource.data.acl);
+      allow create: if active() && request.resource.data.owner == request.auth.uid && request.auth.uid in request.resource.data.acl;
+      allow update, delete: if admin() || (active() && resource.data.owner == request.auth.uid);
+    }
+    match /cards/{id} {
+      allow read, update, delete: if admin() || (active() && request.auth.uid in resource.data.acl);
+      allow create: if admin() || (active() && request.auth.uid in request.resource.data.acl);
+    }
+    match /gdocs/{id} {
+      allow read, update, delete: if admin() || (active() && request.auth.uid in resource.data.acl);
+      allow create: if admin() || (active() && request.auth.uid in request.resource.data.acl);
+    }
+  }
+}

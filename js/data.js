@@ -40,10 +40,16 @@ function dayOffset(n) {
   return d.toISOString().slice(0, 10);
 }
 
+// Empty state for the real program: everything comes from the server after sign-in.
+function emptyState() {
+  return { v: 2, lang: 'en', view: 'vector', active: '', draft: {}, vectors: [], cards: [], docs: [], gdocs: [],
+    zones: { company: [], direction: [], audience: [], topic: [] }, legend: defaultLegend(),
+    user: { name: '', email: '', photo: '' }, widgets: WIDGETS.slice(), guideSeen: false };
+}
 function demoState() {
   const V = { company: 'c1', direction: 'd1', audience: 'a1', topic: 't1' };
   const card = (o) => Object.assign({
-    id: 'k' + Math.random().toString(36).slice(2, 9), type: 'contact', stage: 'new', title: '',
+    id: 'k' + Math.random().toString(36).slice(2, 9), type: 'contact', stage: 'new', title: '', vid: 'v1',
     vec: { ...V }, f: {}, next: { text: '', date: '' }, awaiting: false,
     auto: { follow: false, reply: false, notify: true, draft: true }, notes: '', photo: '',
   }, o);
@@ -103,9 +109,9 @@ function demoState() {
       card({ stage: 'negotiation', title: 'David Chen', f: { jobTitle: 'Owner', company: 'Pacific Core DC' },
         next: { text: 'Send revised scope', date: dayOffset(-2) } }),
       card({ stage: 'signed', title: 'Ingrid Nyström', f: { jobTitle: 'CEO', company: 'Nystrom Montage' } }),
-      card({ stage: 'contacted', title: 'Paul Weber', vec: { company: 'c3', direction: 'd4', audience: 'a3', topic: 't3' },
+      card({ stage: 'contacted', title: 'Paul Weber', vid: 'v2', vec: { company: 'c3', direction: 'd4', audience: 'a3', topic: 't3' },
         f: { jobTitle: 'Preconstruction Manager', company: 'Weber & Sons' }, next: { text: 'Follow-up', date: dayOffset(-1) } }),
-      card({ stage: 'replied', title: 'Dana Ortiz', awaiting: true, vec: { company: 'c3', direction: 'd4', audience: 'a3', topic: 't3' },
+      card({ stage: 'replied', title: 'Dana Ortiz', awaiting: true, vid: 'v2', vec: { company: 'c3', direction: 'd4', audience: 'a3', topic: 't3' },
         f: { jobTitle: 'Director of Business Development', company: 'Ortiz Construction' } }),
     ],
     docs: [
