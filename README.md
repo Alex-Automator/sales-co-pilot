@@ -1,4 +1,4 @@
-# VECTOR SCP — Sales-co-pilot
+# VECTOR — Sales-co-pilot
 
 Web app for finding B2B clients, contacting them and tracking how effective those contacts are.
 Built for ODDIN, INDUSTRIT and BidPlan Partner.
