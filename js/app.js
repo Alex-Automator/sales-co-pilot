@@ -1,4 +1,4 @@
-// VECTOR (Sales-co-pilot) 0.1: interface on demo data, saved in the browser.
+// VECTOR SCP (Sales-co-pilot) 0.1: interface on demo data, saved in the browser.
 // No sign-in, mail, Sheets or AI yet: those arrive in later stages (see docs/SPEC.md).
 (function () {
   const KEY = 'sales-co-pilot-v2';
@@ -55,7 +55,7 @@
     const u = S.user, ava = u.photo ? `<img src="${u.photo}" alt="">` : esc(initials(u.name));
     const langX = `<b class="${S.lang === 'en' ? 'on' : ''}">EN</b> / <b class="${S.lang === 'uk' ? 'on' : ''}">UA</b>`;
     const later = (n) => `${t('stage')} ${n}`;
-    return `<header class="top"><div class="brand" tabindex="0"><div class="logo"><svg class="mark" viewBox="0 0 30 22"><path d="M0 0h7l7 11-7 11H0l7-11z" opacity=".45"/><path d="M11 0h9l10 11-10 11h-9l8-11z"/></svg><span class="bn"><b>VECTOR</b><small>Sales-co-pilot</small></span><span class="car">▾</span></div>
+    return `<header class="top"><div class="brand" tabindex="0"><div class="logo"><svg class="mark" viewBox="0 0 30 22"><path d="M0 0h7l7 11-7 11H0l7-11z" opacity=".45"/><path d="M11 0h9l10 11-10 11h-9l8-11z"/></svg><span class="bn"><b>VECTOR <i>SCP</i></b><small>Sales-co-pilot</small></span><span class="car">▾</span></div>
         <div class="menu"><div class="mh">${t('appSettings')}</div>${mi('lang', t('setLanguage'), langX)}${mi('legendOpen', t('setColors'), '', !activeVector())}
         ${mi('', t('setUsers'), later(2), 1)}${mi('', t('setMail'), later(3), 1)}${mi('', t('setAI'), later(4), 1)}<hr>${mi('reset', t('reset'))}<div class="ver">${t('version')} ${VERSION}</div></div></div>
       <nav>${tabs}</nav><div class="crumb" title="${crumb}">${crumb}</div>
@@ -371,7 +371,7 @@
     const html = view();
     document.documentElement.lang = S.lang === 'uk' ? 'uk' : 'en';
     document.getElementById('app').innerHTML = top() + html +
-      `<footer class="demo">VECTOR ${VERSION} · ${t('demo')} · <button class="link" data-act="reset">${t('reset')}</button></footer>` + vCardModal() + vEditModal() + vAI();
+      `<footer class="demo">VECTOR SCP ${VERSION} · ${t('demo')} · <button class="link" data-act="reset">${t('reset')}</button></footer>` + vCardModal() + vEditModal() + vAI();
     const af = document.querySelector('[autofocus]'); if (af) af.focus();
     ui.fresh = null; ui.popped = null;
   }
