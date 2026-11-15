@@ -1,12 +1,12 @@
-// Sales-Co-pilot, revision 3: interface on demo data, saved in the browser.
+// Sales-Co-pilot 0.1: interface on demo data, saved in the browser.
 // No sign-in, mail, Sheets or AI yet: those arrive in later stages (see docs/SPEC.md).
 (function () {
   const KEY = 'sales-co-pilot-v2';
   let S = load();
-  let ui = { open: null, edit: null, q: '', ftype: 'all', fdue: false, zone: 'company', dbtab: 'library', delArm: false, adding: null, fresh: null, popped: null, menu: null, legendEdit: false, fcolor: '' };
+  let ui = { open: null, edit: null, q: '', ftype: 'all', fdue: false, zone: 'company', dbtab: 'library', delArm: false, adding: null, fresh: null, popped: null, menu: null, legendEdit: false, fcolor: '', cal: 0, ai: !S.guideSeen, aiView: 'home', aiLog: [] };
 
   function load() {
-    try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.v === 2) { s.legend = s.legend || defaultLegend(); s.user = s.user || defaultUser(); return s; } } catch (e) {}
+    try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.v === 2) { s.legend = s.legend || defaultLegend(); s.user = s.user || defaultUser(); s.widgets = s.widgets || WIDGETS.slice(); s.gdocs = s.gdocs || []; return s; } } catch (e) {}
     return demoState();
   }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
@@ -17,7 +17,11 @@
   const stageColor = (s) => (STAGES.find((x) => x[0] === s) || STAGES[0])[1];
   const stageIdx = (s) => STAGES.findIndex((x) => x[0] === s);
   const item = (zone, id) => S.zones[zone].find((x) => x.id === id);
-  const closed = (c) => c.stage === 'signed' || c.stage === 'lost';
+  const closed = (c) => c.stage === 'signed' || c.stage === 'lost' || !!c.done;
+  // Everything the operator sees in widgets and in AI answers is limited to their own vectors.
+  const myVectors = () => S.vectors.filter((v) => !v.owner || v.owner === 'me');
+  const myCards = () => { const vs = myVectors(); return S.cards.filter((c) => vs.some((v) => ZONES.every((z) => c.vec[z] === v[z]))); };
+  const cardSub = (c) => (c.type === 'contact' ? [c.f.jobTitle, c.f.company].filter(Boolean).join(' · ') : c.next.text || '');
   const isDue = (c) => c.next && c.next.date && c.next.date <= today() && !closed(c);
   const initials = (s) => String(s || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
   const activeVector = () => S.vectors.find((v) => v.id === S.active);
@@ -51,11 +55,11 @@
     const u = S.user, ava = u.photo ? `<img src="${u.photo}" alt="">` : esc(initials(u.name));
     const langX = `<b class="${S.lang === 'en' ? 'on' : ''}">EN</b> / <b class="${S.lang === 'uk' ? 'on' : ''}">UA</b>`;
     const later = (n) => `${t('stage')} ${n}`;
-    return `<header class="top"><div class="brand" tabindex="0"><div class="logo"><span class="dot"></span><span class="bn">Sales-Co-pilot</span><span class="car">▾</span></div>
+    return `<header class="top"><div class="brand" tabindex="0"><div class="logo"><svg class="mark" viewBox="0 0 30 22"><path d="M0 0h7l7 11-7 11H0l7-11z" opacity=".45"/><path d="M11 0h9l10 11-10 11h-9l8-11z"/></svg><span class="bn">Sales-Co-pilot</span><span class="car">▾</span></div>
         <div class="menu"><div class="mh">${t('appSettings')}</div>${mi('lang', t('setLanguage'), langX)}${mi('legendOpen', t('setColors'), '', !activeVector())}
-        ${mi('', t('setUsers'), later(2), 1)}${mi('', t('setMail'), later(3), 1)}${mi('', t('setAI'), later(4), 1)}<hr>${mi('reset', t('reset'))}</div></div>
+        ${mi('', t('setUsers'), later(2), 1)}${mi('', t('setMail'), later(3), 1)}${mi('', t('setAI'), later(4), 1)}<hr>${mi('reset', t('reset'))}<div class="ver">${t('version')} ${VERSION}</div></div></div>
       <nav>${tabs}</nav><div class="crumb" title="${crumb}">${crumb}</div>
-      <div class="right"><button class="userbtn" data-act="userMenu"><span class="un"><b>${esc(u.name)}</b><small>${esc(u.email)}</small></span><span class="ava">${ava}</span></button>
+      <div class="right"><button class="aibtn ${ui.ai ? 'on' : ''}" data-act="aiToggle">${svg(UI_ICONS.spark)}<span>${t('aiHelper')}</span></button><button class="userbtn" data-act="userMenu"><span class="un"><b>${esc(u.name)}</b><small>${esc(u.email)}</small></span><span class="ava">${ava}</span></button>
         ${ui.menu === 'user' ? `<div class="menu show"><div class="mh">${esc(u.email)}</div>${mi('editProfile', t('myProfile'))}${mi('lang', t('setLanguage'), langX)}<hr>${mi('', t('signOut'), later(2), 1)}</div>` : ''}</div></header>`;
   }
 
@@ -115,9 +119,11 @@
     const lg = legendOf(c.color);
     const av = c.type === 'contact' || c.type === 'company'
       ? `<span class="cav">${c.photo ? `<img src="${c.photo}" alt="">` : esc(initials(c.type === 'contact' ? c.title : c.title))}</span>` : '';
-    return `<article class="card t-${c.type}" draggable="true" data-card="${c.id}" data-act="open" data-id="${c.id}" style="border-left-color:${stageColor(c.stage)};${lg ? `--cc:${lg.color}` : ''}" ${lg ? `title="${esc(lg.label)}"` : ''}>
+    const due = c.next && c.next.date;
+    const tk = c.type !== 'task' ? '' : `<button class="tk ${c.done ? 'ok' : due && due < today() ? 'late' : due === today() ? 'now' : ''}" data-act="taskDone" data-id="${c.id}" title="${t('taskDone')}">${svg(c.done ? UI_ICONS.check : due ? UI_ICONS.clock : UI_ICONS.ring)}</button>`;
+    return `<article class="card t-${c.type} ${c.done ? 'done' : ''}" draggable="true" data-card="${c.id}" data-act="open" data-id="${c.id}" style="border-left-color:${stageColor(c.stage)};${lg ? `--cc:${lg.color}` : ''}" ${lg ? `title="${esc(lg.label)}"` : ''}>
       <div class="ct"><span class="tyw"><span class="tyi">${svg(TYPE_ICONS[c.type])}</span><span class="ty">${t('type_' + c.type)}</span></span><span class="bd">${badges.join('')}</span></div>
-      <div class="crow">${av}<div><div class="cn">${esc(c.title) || '—'}</div>${sub ? `<div class="cs">${esc(sub)}</div>` : ''}</div></div></article>`;
+      <div class="crow">${av}<div><div class="cn">${esc(c.title) || '—'}</div>${sub ? `<div class="cs">${esc(sub)}</div>` : ''}</div></div>${tk}</article>`;
   }
 
   function vBoard() {
@@ -184,6 +190,9 @@
           <label class="fl"><span>${t('nextDate')}</span><input class="in" type="date" data-next="date" value="${esc(c.next.date)}"></label>
           <button class="tog" data-act="awaiting"><span class="sw ${c.awaiting ? 'on' : ''}"><i></i></span><span>${t('awaiting')}</span></button></div>
         <div class="box"><div class="bh">${t('autopilot')}</div>${tog(c, 'follow', t('apFollow'))}${tog(c, 'reply', t('apReply'))}${tog(c, 'draft', t('apDraft'))}${tog(c, 'notify', t('apNotify'))}</div>
+        ${DOC_STAGES.includes(c.stage) && c.type !== 'task' ? `<div class="box docsbox"><div class="bh">${t('docsBox')}</div>${
+          S.gdocs.filter((d) => d.card === c.id).map((d) => `<div class="lrow"><span class="num">${esc(d.no.slice(-2))}</span><span class="lt">${t('doc_' + d.type)}</span><span class="ty">${t('draft')}</span></div>`).join('')}
+          <div class="row2 gen"><select class="in" data-doctype>${DOC_TYPES.map((x) => `<option value="${x}">${t('doc_' + x)}</option>`).join('')}</select><button class="btn sm" data-act="prepDoc">${t('prepare')}</button></div></div>` : ''}
         <div class="acts"><button class="btn ghost sm" data-act="clone">${t('clone')}</button>
           <button class="btn ghost sm danger" data-act="del">${ui.delArm ? t('delSure') : t('del')}</button>
           <button class="btn sm" data-act="close">${t('close')}</button></div>
@@ -247,11 +256,12 @@
     return `<div class="overlay" data-act="closeBg"><div class="modal" role="dialog"><div class="mleft">${left}</div><div class="mright">${right}</div></div></div>`;
   }
 
-  function vAnalytics() {
-    const contacts = S.cards.filter((c) => c.type === 'contact');
+  // ---------- widgets ----------
+  function wAnalytics() {
+    const contacts = myCards().filter((c) => c.type === 'contact');
     const at = (cs, s) => cs.filter((c) => c.stage !== 'lost' && stageIdx(c.stage) >= stageIdx(s)).length;
     const rate = (cs) => { const a = cs.filter((c) => c.stage !== 'new'); return a.length ? Math.round(100 * at(a, 'replied') / a.length) : 0; };
-    const need = S.cards.filter((c) => (c.awaiting && !closed(c)) || isDue(c)).length;
+    const need = myCards().filter((c) => (c.awaiting && !closed(c)) || isDue(c)).length;
     const kp = [[at(contacts, 'meeting'), t('kMeetings'), 1], [at(contacts, 'signed'), t('kSigned'), 1], [rate(contacts) + '%', t('kRate')], [need, t('kNeed')]]
       .map((k) => `<div class="kpi ${k[2] ? 'main' : ''}"><b>${k[0]}</b><span>${k[1]}</span></div>`).join('');
     const seg = ZONES.map((z) => `<button class="chip ${ui.zone === z ? 'on' : ''}" data-act="zone" data-v="${z}">${t('zone_' + z)}</button>`).join('');
@@ -263,16 +273,46 @@
       return `<tr><td>${esc(it.name)}</td><td>${cs.filter((c) => c.stage !== 'new').length}</td><td>${at(cs, 'replied')}</td><td>${m}</td><td>${at(cs, 'signed')}</td>
         <td><span class="bar"><i style="width:${r}%"></i></span>${r}%</td></tr>`;
     }).join('');
-    const health = S.zones.company.map((c) => `<div class="mh2"><i></i><span><b>${esc(primaryMailbox(c) || c.name)}</b><br><small>${t('stageLater')}</small></span></div>`).join('');
-    return `<main class="body"><div class="kpis">${kp}</div><div class="an">
-      <section class="box"><div class="bh">${t('effortBy')} <span class="seg2">${seg}</span></div>
+    return `<div class="kpis">${kp}</div><div class="bh sp">${t('effortBy')} <span class="seg2">${seg}</span></div>
       <table><tr><th></th><th>${t('contacted')}</th><th>${t('replies')}</th><th>${t('meetings')}</th><th>${t('signed')}</th><th>${t('kRate')}</th></tr>${rows}</table>
-      <p class="hint"><b>${t('bestVector')}:</b> ${best ? `${esc(best.name)} — ${best.m}` : t('noData')}</p></section>
-      <section class="box"><div class="bh">${t('mailHealth')}</div>${health}<p class="sub small">${t('mailHealthNote')}</p></section></div></main>`;
+      <p class="hint"><b>${t('bestVector')}:</b> ${best ? `${esc(best.name)} — ${best.m}` : t('noData')}</p>`;
+  }
+  const pad = (n) => String(n).padStart(2, '0');
+  function wCalendar() {
+    const now = new Date(), first = new Date(now.getFullYear(), now.getMonth() + ui.cal, 1);
+    const y = first.getFullYear(), m = first.getMonth(), days = new Date(y, m + 1, 0).getDate(), lead = (first.getDay() + 6) % 7;
+    const key = (d) => `${y}-${pad(m + 1)}-${pad(d)}`;
+    const ev = myCards().filter((c) => c.next && c.next.date && c.next.date.slice(0, 7) === key(1).slice(0, 7) && !c.done)
+      .sort((a, b) => a.next.date.localeCompare(b.next.date));
+    const loc = S.lang === 'uk' ? 'uk-UA' : 'en-GB';
+    const wd = [...Array(7)].map((_, i) => `<span class="wd">${new Date(2024, 0, 1 + i).toLocaleDateString(loc, { weekday: 'short' })}</span>`).join('');
+    let cells = '<span></span>'.repeat(lead);
+    for (let d = 1; d <= days; d++) {
+      const es = ev.filter((c) => c.next.date === key(d)), meet = es.some((c) => c.stage === 'meeting');
+      cells += `<span class="day ${meet ? 'meet' : es.length ? 'other' : ''} ${key(d) === today() ? 'tod' : ''}" title="${esc(es.map((c) => c.title + (c.next.text ? ': ' + c.next.text : '')).join('\n'))}">${d}</span>`;
+    }
+    const list = ev.map((c) => `<button class="erow" data-act="open" data-id="${c.id}"><i class="${c.stage === 'meeting' ? 'meet' : 'other'}"></i><b>${c.next.date.slice(8)}</b><span>${esc(c.title)}${c.next.text ? ' · ' + esc(c.next.text) : ''}</span></button>`).join('')
+      || `<p class="sub">${t('noEvents')}</p>`;
+    return `<div class="calhead"><button class="dots" data-act="calPrev">‹</button><b>${first.toLocaleDateString(loc, { month: 'long', year: 'numeric' })}</b><button class="dots" data-act="calNext">›</button></div>
+      <div class="cal">${wd}${cells}</div><div class="callegend"><span><i class="meet"></i>${t('calMeeting')}</span><span><i class="other"></i>${t('calOther')}</span></div><div class="elist">${list}</div>`;
+  }
+  function wImportant() {
+    const cs = myCards().filter((c) => (c.awaiting && !closed(c)) || (isDue(c) && c.next.date < today()));
+    return cs.map((c) => `<button class="erow" data-act="open" data-id="${c.id}"><span class="tyi">${svg(TYPE_ICONS[c.type])}</span><span><b>${esc(c.title)}</b> ${esc(cardSub(c))}</span>
+      ${c.awaiting ? `<span class="rep">${t('replyWaiting')}</span>` : `<span class="due overdue">${t('overdue')}</span>`}</button>`).join('') || `<p class="sub">${t('impEmpty')}</p>`;
+  }
+  function wMail() {
+    return S.zones.company.map((c) => `<div class="mh2"><i></i><span><b>${esc(primaryMailbox(c) || c.name)}</b><br><small>${t('stageLater')}</small></span></div>`).join('')
+      + `<p class="sub small">${t('mailHealthNote')}</p>`;
+  }
+  function vWidgets() {
+    const W = { analytics: [wAnalytics, 'wAnalytics'], calendar: [wCalendar, 'wCalendar'], important: [wImportant, 'wImportant'], mail: [wMail, 'wMail'] };
+    return `<main class="body"><p class="sub dh">${t('dragHint')}</p><div class="wgrid">${S.widgets.filter((id) => W[id]).map((id) =>
+      `<section class="box widget w-${id}" data-widget="${id}"><div class="bh wh" draggable="true" data-wgrip="${id}"><span><span class="grip">⠿</span>${t(W[id][1])}</span></div>${W[id][0]()}</section>`).join('')}</div></main>`;
   }
 
   function vDatabase() {
-    const tabs = ['library', 'generator', 'documents', 'clients'].map((x) =>
+    const tabs = ['library', 'documents', 'clients'].map((x) =>
       `<button class="chip ${ui.dbtab === x ? 'on' : ''}" data-act="dbtab" data-v="${x}">${t(x)}</button>`).join('');
     let body;
     if (ui.dbtab === 'library') {
@@ -282,19 +322,56 @@
       body = `<p class="sub">${t('libSub')}</p><table><tr><th>${t('priority')}</th><th>${t('docTitle')}</th><th>${t('docUrl')}</th><th>${t('company')}</th><th></th></tr>${rows}</table>
         <form class="docform" data-docform><input class="in" name="title" placeholder="${t('docTitle')}" required><input class="in" name="url" placeholder="https://…">
         <select class="in" name="priority"><option>1</option><option>2</option><option>3</option></select><button class="btn sm">${t('addDoc')}</button></form>`;
+    } else if (ui.dbtab === 'documents') {
+      const rows = S.gdocs.map((d) => `<tr><td>${esc(d.no)}</td><td>${t('doc_' + d.type)}</td><td>${esc(d.client)}</td><td>${esc(d.date)}</td><td><span class="ty">${t('draft')}</span></td>
+        <td><button class="link" data-act="rmGdoc" data-id="${d.id}">×</button></td></tr>`).join('');
+      body = `<p class="sub">${t('docsSub')}</p>` + (rows ? `<table><tr><th>${t('docNo')}</th><th>${t('type')}</th><th>${t('client')}</th><th>${t('date')}</th><th>${t('status')}</th><th></th></tr>${rows}</table>` : `<p class="later">${t('noDocs')}</p>`);
+    } else if (ui.dbtab === 'generator') {
+      body = `<div class="genpanel"><span class="ty">${t('stageLater')}</span><h2>${t('genTitle')}</h2><p>${t('genHow')}</p>
+        <div class="gtypes">${DOC_TYPES.map((x) => `<span class="gtype">${svg('<path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4M10 12h5M10 16h5"/>')}${t('doc_' + x)}</span>`).join('')}</div><p class="sub">${t('genLater')}</p></div>`;
     } else {
-      const k = { generator: 'genSub', documents: 'docsSub', clients: 'clientsSub' }[ui.dbtab];
-      body = `<div class="later"><span class="ty">${t('stageLater')}</span><p>${t(k)}</p></div>`;
+      body = `<div class="later"><span class="ty">${t('stageLater')}</span><p>${t('clientsSub')}</p></div>`;
     }
-    return `<main class="body"><div class="tools flat">${tabs}</div><section class="box">${body}</section></main>`;
+    return `<main class="body"><div class="tools flat">${tabs}<button class="btn sm gen ${ui.dbtab === 'generator' ? 'on' : ''}" data-act="dbtab" data-v="generator">${svg(UI_ICONS.spark)}${t('generate')}</button></div><section class="box">${body}</section></main>`;
+  }
+
+  // ---------- AI helper ----------
+  function answer(q) {
+    const cs = myCards();
+    if (q === 'today') {
+      const l = cs.filter((c) => (c.awaiting && !closed(c)) || isDue(c));
+      return l.length ? l.map((c) => `• ${c.title}${c.awaiting ? ' — ' + t('replyWaiting') : c.next.text ? ' — ' + c.next.text : ''}`).join('\n') : t('ans_none');
+    }
+    if (q === 'meet') {
+      const l = cs.filter((c) => c.stage === 'meeting');
+      return l.length ? l.map((c) => `• ${c.next.date || '—'} · ${c.title}${c.f.company ? ', ' + c.f.company : ''}`).join('\n') : t('ans_none');
+    }
+    let best = null;
+    myVectors().forEach((v) => { const n = cs.filter((c) => inVector(c, v) && c.type === 'contact' && c.stage !== 'lost' && stageIdx(c.stage) >= stageIdx('meeting')).length; if (n && (!best || n > best.n)) best = { v, n }; });
+    return best ? `${t('ans_best')}: ${best.n}\n${ZONES.map((z) => (item(z, best.v[z]) || {}).name).join(' › ')}` : t('ans_bestNone');
+  }
+  function vAI() {
+    if (!ui.ai) return '';
+    let body;
+    if (ui.aiView === 'guide') {
+      body = `<button class="link" data-act="aiHome">${t('backHome')}</button><h2>${t('guideTitle')}</h2>${(GUIDE[S.lang] || GUIDE.en).map((g) => `<div class="gstep"><b>${g[0]}</b><p>${g[1]}</p></div>`).join('')}`;
+    } else {
+      const hello = S.guideSeen ? `<button class="mi" data-act="aiGuide"><span>${t('readGuide')}</span></button>`
+        : `<div class="hello"><p>${t('aiHello')}</p><div class="acts"><button class="btn sm" data-act="aiGuide">${t('readGuide')}</button><button class="btn ghost sm" data-act="guideLater">${t('later')}</button></div></div>`;
+      const log = ui.aiLog.map((x) => `<div class="bub q">${esc(t('qa_' + x))}</div><div class="bub a">${esc(answer(x))}</div>`).join('');
+      body = `${hello}<div class="bh sp">${t('quick')}</div>${['today', 'meet', 'best'].map((q) => `<button class="chip" data-act="aiAsk" data-q="${q}">${t('qa_' + q)}</button>`).join('')}
+        <div class="ailog">${log}</div><p class="sub small">${t('aiScope')}</p>`;
+    }
+    return `<aside class="aipanel"><div class="aihead"><b>${svg(UI_ICONS.spark)}${t('aiHelper')}</b><button class="dots" data-act="aiToggle">×</button></div>
+      <div class="aibody">${body}</div><div class="aifoot"><input class="in" disabled placeholder="${t('aiSoon')}"></div></aside>`;
   }
 
   function render() {
-    const view = { vector: vVector, board: vBoard, analytics: vAnalytics, database: vDatabase }[S.view] || vVector;
+    const view = { vector: vVector, board: vBoard, analytics: vWidgets, database: vDatabase }[S.view] || vVector;
     const html = view();
     document.documentElement.lang = S.lang === 'uk' ? 'uk' : 'en';
     document.getElementById('app').innerHTML = top() + html +
-      `<footer class="demo">${t('demo')} · <button class="link" data-act="reset">${t('reset')}</button></footer>` + vCardModal() + vEditModal();
+      `<footer class="demo">Sales-Co-pilot ${VERSION} · ${t('demo')} · <button class="link" data-act="reset">${t('reset')}</button></footer>` + vCardModal() + vEditModal() + vAI();
     const af = document.querySelector('[autofocus]'); if (af) af.focus();
     ui.fresh = null; ui.popped = null;
   }
@@ -305,6 +382,21 @@
   const curParam = () => (ui.edit && ui.edit.kind === 'param' ? item(ui.edit.zone, ui.edit.id) : null);
   const A = {
     view(d) { S.view = d.v; ui.adding = null; commit(); },
+    taskDone(d) { const c = S.cards.find((x) => x.id === d.id); c.done = !c.done; commit(); },
+    calPrev() { ui.cal--; render(); },
+    calNext() { ui.cal++; render(); },
+    aiToggle() { ui.ai = !ui.ai; if (!ui.ai && !S.guideSeen) { S.guideSeen = true; save(); } render(); },
+    aiGuide() { ui.aiView = 'guide'; S.guideSeen = true; commit(); },
+    aiHome() { ui.aiView = 'home'; render(); },
+    guideLater() { S.guideSeen = true; ui.ai = false; commit(); },
+    aiAsk(d) { ui.aiLog.push(d.q); render(); const l = document.querySelector('.aibody'); if (l) l.scrollTop = l.scrollHeight; },
+    prepDoc() {
+      const c = cur(), sel = document.querySelector('[data-doctype]');
+      S.gdocs.push({ id: uid('g'), no: 'D-' + String(S.gdocs.length + 1).padStart(4, '0'), type: sel.value, card: c.id,
+        client: c.type === 'contact' ? [c.title, c.f.company].filter(Boolean).join(', ') : c.title, date: today() });
+      commit();
+    },
+    rmGdoc(d) { S.gdocs = S.gdocs.filter((x) => x.id !== d.id); commit(); },
     userMenu() { ui.menu = ui.menu === 'user' ? null : 'user'; render(); },
     editProfile() { ui.edit = { kind: 'profile' }; ui.menu = null; render(); },
     rmUserPhoto() { S.user.photo = ''; commit(); },
@@ -367,7 +459,7 @@
       S.cards = S.cards.filter((c) => c.id !== ui.open); ui.open = null; commit();
     },
     rmDoc(d) { S.docs = S.docs.filter((x) => x.id !== d.id); commit(); },
-    reset() { S = demoState(); ui.open = null; ui.edit = null; ui.fcolor = ''; ui.legendEdit = false; commit(); },
+    reset() { S = demoState(); S.guideSeen = true; ui.aiLog = []; ui.open = null; ui.edit = null; ui.fcolor = ''; ui.legendEdit = false; commit(); },
   };
 
   function newParam(zone, name) {
@@ -448,15 +540,27 @@
     S.docs.push({ id: uid('x'), title: f.get('title'), url: f.get('url'), priority: +f.get('priority'), company: av ? av.company : '' }); commit();
   });
   // Drag a card to another stage.
-  let drag = null;
-  document.addEventListener('dragstart', (e) => { const c = e.target.closest('[data-card]'); if (c) { drag = c.dataset.card; e.dataTransfer.effectAllowed = 'move'; } });
-  document.addEventListener('dragover', (e) => { const col = e.target.closest('.col'); if (col && drag) { e.preventDefault(); col.classList.add('over'); } });
-  document.addEventListener('dragleave', (e) => { const col = e.target.closest('.col'); if (col) col.classList.remove('over'); });
-  document.addEventListener('drop', (e) => {
-    const col = e.target.closest('.col'); if (!col || !drag) return;
-    e.preventDefault(); const c = S.cards.find((x) => x.id === drag); drag = null;
-    if (c) { c.stage = col.dataset.stage; commit(); }
+  let drag = null, dragW = null;
+  document.addEventListener('dragstart', (e) => {
+    const c = e.target.closest('[data-card]'), w = e.target.closest('[data-wgrip]');
+    if (c) { drag = c.dataset.card; dragW = null; e.dataTransfer.effectAllowed = 'move'; }
+    else if (w) { dragW = w.dataset.wgrip; drag = null; e.dataTransfer.effectAllowed = 'move'; const box = w.closest('.widget'); if (e.dataTransfer.setDragImage) e.dataTransfer.setDragImage(box, 20, 20); }
   });
+  document.addEventListener('dragover', (e) => {
+    const col = e.target.closest('.col'), w = e.target.closest('[data-widget]');
+    if (col && drag) { e.preventDefault(); col.classList.add('over'); }
+    if (w && dragW && w.dataset.widget !== dragW) { e.preventDefault(); w.classList.add('over'); }
+  });
+  document.addEventListener('dragleave', (e) => { const x = e.target.closest('.col,[data-widget]'); if (x && !x.contains(e.relatedTarget)) x.classList.remove('over'); });
+  document.addEventListener('drop', (e) => {
+    const col = e.target.closest('.col'), w = e.target.closest('[data-widget]');
+    if (col && drag) { e.preventDefault(); const c = S.cards.find((x) => x.id === drag); drag = null; if (c) { c.stage = col.dataset.stage; commit(); } return; }
+    if (w && dragW) {
+      e.preventDefault(); const a = S.widgets.indexOf(dragW), b = S.widgets.indexOf(w.dataset.widget); dragW = null;
+      if (a >= 0 && b >= 0) { [S.widgets[a], S.widgets[b]] = [S.widgets[b], S.widgets[a]]; commit(); }
+    }
+  });
+  document.addEventListener('dragend', () => { drag = null; dragW = null; });
   document.addEventListener('paste', (e) => {
     if (!document.querySelector('[data-photo]')) return;
     const f = [...(e.clipboardData ? e.clipboardData.files : [])].find((x) => x.type.startsWith('image/')); if (!f) return;

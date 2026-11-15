@@ -18,6 +18,14 @@ function defaultLegend() {
   ];
 }
 function defaultUser() { return { name: 'Demo Operator', email: 'operator@example.com', photo: '' }; }
+const VERSION = '0.1';
+const WIDGETS = ['analytics', 'calendar', 'important', 'mail'];
+const DOC_TYPES = ['offer', 'framework', 'addendum', 'invoice'];
+const DOC_STAGES = ['proposal', 'negotiation', 'signed'];
+const UI_ICONS = {
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>', clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>', ring: '<circle cx="12" cy="12" r="6"/>',
+  spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7z"/>',
+};
 const SENIORITY = ['Owner / C-level', 'VP', 'Director', 'Manager'];
 // Default grey outline pictures for parameters without an image.
 const ICONS = {
@@ -40,7 +48,7 @@ function demoState() {
     auto: { follow: false, reply: false, notify: true, draft: true }, notes: '', photo: '',
   }, o);
   return {
-    v: 2, legend: defaultLegend(), user: defaultUser(), lang: 'en', view: 'vector', active: 'v1', draft: {},
+    v: 2, legend: defaultLegend(), user: defaultUser(), widgets: WIDGETS.slice(), gdocs: [], guideSeen: false, lang: 'en', view: 'vector', active: 'v1', draft: {},
     vectors: [
       { id: 'v1', company: 'c1', direction: 'd1', audience: 'a1', topic: 't1', owner: 'me' },
       { id: 'v2', company: 'c3', direction: 'd4', audience: 'a3', topic: 't3', owner: 'me' },
@@ -90,7 +98,8 @@ function demoState() {
         notes: 'Tendering a data center in Q1. Asked for a relevant case and rough pricing.' }),
       card({ stage: 'replied', title: 'Tom Reilly', awaiting: true, f: { jobTitle: 'VP Ops', company: 'Calder Construction' } }),
       card({ stage: 'meeting', title: 'Lars Holm', color: 'l2', f: { jobTitle: 'CEO', company: 'Holm & Dahl' }, next: { text: 'Call', date: dayOffset(3) } }),
-      card({ stage: 'proposal', title: 'Sophie Tremblay', f: { jobTitle: 'Director', company: 'Laurentide Build' } }),
+      card({ stage: 'proposal', title: 'Sophie Tremblay', f: { jobTitle: 'Director', company: 'Laurentide Build' }, next: { text: 'Send proposal', date: dayOffset(6) } }),
+      card({ stage: 'meeting', title: 'Greta Solberg', f: { jobTitle: 'Owner', company: 'Solberg Entreprenør' }, next: { text: 'Intro call', date: dayOffset(8) } }),
       card({ stage: 'negotiation', title: 'David Chen', f: { jobTitle: 'Owner', company: 'Pacific Core DC' },
         next: { text: 'Send revised scope', date: dayOffset(-2) } }),
       card({ stage: 'signed', title: 'Ingrid Nyström', f: { jobTitle: 'CEO', company: 'Nystrom Montage' } }),

@@ -7,7 +7,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;text-a
 button:disabled{opacity:.4;cursor:default}
 a{color:var(--acctx)}
 #app{min-height:100%;display:flex;flex-direction:column}
-.top{height:56px;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 22px;gap:22px;flex:none;position:sticky;top:0;background:var(--bg);z-index:5}
+.top{height:56px;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 22px;gap:22px;flex:none;position:sticky;top:0;background:var(--bg);z-index:18}
 .logo{font-weight:700;font-size:16px;display:flex;align-items:center;gap:8px;white-space:nowrap}
 .dot{width:12px;height:12px;border-radius:50%;background:var(--acc)}
 nav{display:flex;gap:4px}
@@ -76,7 +76,7 @@ h2{font-size:20px;margin:6px 0 2px}
 .sw.on{background:var(--acc)}.sw.on i{left:16px}
 .acts{display:flex;gap:8px;margin-top:18px;align-items:center;flex-wrap:wrap}
 .acts .btn:last-child{margin-left:auto}
-.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-bottom:6px}
 .kpi{border:1px solid var(--line);border-radius:12px;padding:18px;background:var(--bg)}
 .kpi b{font-size:38px;font-weight:700;letter-spacing:-1px;display:block}
 .kpi span{font-weight:600}
@@ -213,3 +213,52 @@ button.chev:hover .seg{background:var(--accsoft);color:var(--acctx)}
 .swt.none{background:var(--bg);border:1px dashed var(--mut)}
 .swt.on{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--ink)}
 @media (max-width:900px){.un{display:none}.brand{width:auto}.tt{width:200px}}
+
+/* ---- 0.1: logo, AI helper, task cards, widgets, generator ---- */
+.mark{width:26px;height:19px;fill:var(--acc);flex:none}
+.ver{padding:8px 10px 4px;color:var(--mut);font-size:11.5px}
+.right{display:flex;align-items:center;gap:8px}
+.aibtn{display:flex;align-items:center;gap:6px;padding:7px 12px;border-radius:18px;border:1px solid var(--line);font-weight:600;font-size:13px;white-space:nowrap}
+.aibtn svg{width:16px;height:16px;color:var(--acc)}.aibtn:hover,.aibtn.on{border-color:var(--acc);background:var(--accsoft)}
+.aipanel{position:fixed;top:56px;right:0;bottom:0;width:360px;max-width:100vw;background:var(--bg);border-left:1px solid var(--line);box-shadow:-12px 0 32px #0000001a;z-index:15;display:flex;flex-direction:column}
+.aihead{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--line)}
+.aihead b{display:flex;align-items:center;gap:8px}.aihead svg{width:18px;height:18px;color:var(--acc)}
+.aibody{flex:1;overflow:auto;padding:16px}.aibody .chip{margin:0 6px 6px 0}.aibody h2{margin:10px 0 12px}
+.aifoot{padding:12px 16px;border-top:1px solid var(--line)}
+.hello{background:var(--accsoft);border-radius:12px;padding:14px;line-height:1.45}.hello .acts{margin-top:12px}.hello .acts .btn:last-child{margin-left:0}
+.gstep{padding:12px 0;border-top:1px solid var(--line)}.gstep p{margin-top:5px;line-height:1.5;color:#4a453e}
+.bh.sp{margin-top:18px}
+.ailog{margin:10px 0}.bub{padding:9px 12px;border-radius:12px;margin-top:8px;line-height:1.45;white-space:pre-line;font-size:13px}
+.bub.q{background:var(--ink);color:var(--bg);margin-left:40px}.bub.a{background:var(--panel);margin-right:24px}
+/* task card: full outline and a clickable corner instead of the stage stripe */
+.card.t-task{border:1.5px solid var(--ink)!important;border-style:solid!important;position:relative;overflow:hidden;padding-right:30px;background:var(--bg)}
+.t-task .ct{margin-bottom:5px}
+.tk{position:absolute;right:0;bottom:0;width:38px;height:38px;--k:var(--ink);background:linear-gradient(135deg,transparent 50%,var(--k) 50%);color:#fff}
+.tk svg{position:absolute;right:3px;bottom:3px;width:14px;height:14px}
+.tk.late{--k:#C8473F}.tk.now{--k:var(--acc)}.tk.ok{--k:#12995B}
+.tk:hover{filter:brightness(1.15)}
+.card.done{opacity:.55}.card.done .cn{text-decoration:line-through}
+/* widgets */
+.dh{margin:0 0 12px}
+.wgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+.widget{margin-top:0;border:1px solid var(--line)}.widget.over{outline:2px dashed var(--acc);outline-offset:3px}
+.w-analytics{grid-column:span 2}
+.wh{cursor:grab;font-size:13px;color:var(--ink);margin:-4px -4px 12px;padding:4px}.wh:active{cursor:grabbing}
+.grip{color:var(--mut);margin-right:8px}
+.calhead{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;text-transform:capitalize}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;text-align:center}
+.wd{font-size:11px;color:var(--mut);padding:4px 0}
+.day{padding:7px 0;border-radius:8px;font-size:13px;border:1.5px solid transparent}
+.day.meet{background:#C8473F;color:#fff;font-weight:700}.day.other{border-color:var(--ink);font-weight:600}.day.tod{box-shadow:0 0 0 2px var(--bg),0 0 0 3.5px var(--acc)}
+.callegend{display:flex;gap:16px;margin:12px 0 6px;font-size:12px;color:var(--mut)}.callegend span{display:flex;align-items:center;gap:6px}
+i.meet,i.other{width:11px;height:11px;border-radius:3px;flex:none;display:inline-block}i.meet{background:#C8473F}i.other{border:1.5px solid var(--ink)}
+.erow{display:flex;align-items:center;gap:10px;width:100%;padding:9px 6px;border-top:1px solid var(--line);border-radius:0;line-height:1.35}
+.erow:hover{background:var(--panel)}.erow>span{flex:1;min-width:0;color:var(--mut)}.erow>.tyi,.erow>.rep,.erow>.due{flex:none}.erow>.rep{color:var(--onacc)}.erow>.overdue{color:#C8473F}.erow b{color:var(--ink)}
+/* generator: a program module, set apart from the database tabs */
+.btn.gen{display:inline-flex;align-items:center;gap:7px}.btn.gen svg{width:15px;height:15px}.btn.gen.on{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--acc)}
+.genpanel{padding:18px 8px}.genpanel p{margin-top:8px;line-height:1.55;max-width:680px}
+.gtypes{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:18px 0}
+.gtype{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:10px;padding:12px;font-weight:600}.gtype svg{width:20px;height:20px;color:var(--acc);flex:none}
+p.later{padding:22px 8px;color:var(--mut)}
+.row2.gen{grid-template-columns:1fr auto;margin-top:8px;align-items:center}
+@media (max-width:900px){.wgrid,.gtypes{grid-template-columns:1fr}.w-analytics{grid-column:auto}.aibtn span{display:none}}
