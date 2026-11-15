@@ -360,3 +360,8 @@ p.later{padding:22px 8px;color:var(--mut)}
 .ctable td:first-child .tyi{vertical-align:-3px;margin-right:4px}
 .sdot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
 @media (max-width:700px){.uacc{margin-left:0}.uacc .lrow,.col2{flex-wrap:wrap}.uacc .lrow .in,.col2 .in{width:100%}.ctable{display:block;overflow-x:auto;white-space:nowrap}}
+
+.vhead{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.showf{display:flex;align-items:center;gap:8px;color:var(--mut);font-size:12.5px;flex:none}.showf .in{width:auto;min-width:150px;padding:6px 8px}
+.vrow .ownr{align-self:center;margin:0 4px 0 0;font-size:12px;white-space:nowrap}
+@media (max-width:700px){.vhead{flex-direction:column;gap:10px}.showf{width:100%}.showf .in{flex:1}}

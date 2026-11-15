@@ -4,7 +4,7 @@
   const KEY = 'sales-co-pilot-v2', PKEY = 'vector-prefs-v1';
   // With Firebase loaded the program is real: sign-in and shared data. Without it (the preview) it runs on demo data.
   const CLOUD = !!(window.firebase && window.FIREBASE_CONFIG);
-  const PREFS = ['lang', 'view', 'active', 'draft', 'widgets', 'guideSeen'];
+  const PREFS = ['lang', 'view', 'active', 'draft', 'widgets', 'guideSeen', 'show'];
   const au = { status: CLOUD ? 'loading' : 'in', uid: 'me', role: 'admin', users: [], guards: {}, err: '' };
   let S = load();
   let ui = { open: null, edit: null, q: '', ftype: 'all', fdue: false, zone: 'company', dbtab: 'library', delArm: false, adding: null, fresh: null, popped: null, menu: null, legendEdit: false, fcolor: '', cal: 0, ai: !S.guideSeen, aiView: 'home', aiLog: [] };
@@ -26,7 +26,16 @@
   const item = (zone, id) => S.zones[zone].find((x) => x.id === id);
   const closed = (c) => c.stage === 'signed' || c.stage === 'lost' || !!c.done;
   // Everything the operator sees in widgets and in AI answers is limited to their own vectors.
-  const myVectors = () => S.vectors;
+  // "Show" filter: only mine, everything, or one person (admin). The admin starts on "only mine", operators on "everything".
+  const showMode = () => S.show || (CLOUD && au.role === 'admin' ? 'mine' : 'all');
+  const showUid = () => { const m = showMode(); return m === 'all' ? null : m === 'mine' ? au.uid : m; };
+  const myVectors = () => { const u = showUid(); return u ? S.vectors.filter((v) => v.owner === u) : S.vectors; };
+  // A parameter belongs to someone if they created it, were given the company, or use it in one of their vectors.
+  function relevant(z, it) {
+    const u = showUid(); if (!u || !CLOUD || S.draft[z] === it.id) return true;
+    if (z === 'company' && it.access && it.access[u]) return true;
+    return it.by === u || S.vectors.some((v) => v.owner === u && v[z] === it.id);
+  }
   const myCards = () => { const vs = myVectors(); return S.cards.filter((c) => vs.some((v) => c.vid === v.id)); };
   const userName = (id) => { const u = au.users.find((x) => x.id === id); return u ? u.name || u.email : id === au.uid ? t('you') : '—'; };
   const ord = (a, b) => (a.ord || 0) - (b.ord || 0);
@@ -112,17 +121,17 @@
   }
 
   function vVector() {
-    const rows = S.vectors.map((v) => {
+    const rows = myVectors().map((v) => {
       const n = tally(S.cards.filter((c) => inVector(c, v)));
       return `<div class="vrow ${ui.fresh === v.id ? 'fresh' : ''}">
         <button class="chev" data-act="openVector" data-id="${v.id}">${chevron(v, {})}</button>
-        <span class="cnt">${pills(n)}</span>
+        <span class="cnt">${CLOUD && v.owner !== au.uid ? `<small class="ownr">${esc(userName(v.owner))}</small>` : ''}${pills(n)}</span>
         <button class="btn sm" data-act="openVector" data-id="${v.id}">${t('openBoard')}</button>
         <button class="dots" data-act="editVector" data-id="${v.id}" title="${t('edit')}">⋯</button></div>`;
     }).join('') || `<p class="sub pad">${t('noVectors')}</p>`;
 
     const zones = ZONES.map((z, i) => {
-      const list = z === 'direction' ? S.zones.direction.filter((d) => d.company === S.draft.company) : S.zones[z];
+      const list = (z === 'direction' ? S.zones.direction.filter((d) => d.company === S.draft.company) : S.zones[z]).filter((it) => relevant(z, it));
       const items = list.map((it) => `<div class="pi ${S.draft[z] === it.id ? 'sel' : ''}" role="button" tabindex="0" data-act="pick" data-zone="${z}" data-id="${it.id}" title="${esc(it.name)}">
           ${pic(z, it)}<span class="pn">${esc(it.name)}</span><span class="cnt">${pills(tally(S.cards.filter((c) => c.vec[z] === it.id)), true)}</span>
           <button class="dots" data-act="editParam" data-zone="${z}" data-id="${it.id}" title="${t('edit')}">⋯</button></div>`).join('');
@@ -137,7 +146,9 @@
     const ready = draftComplete(), dup = ready && sameVector(S.draft);
     const seed = CLOUD && au.role === 'admin' && ZONES.every((z) => !S.zones[z].length) ? `<div class="hello seed"><b>${t('seedTitle')}</b><button class="btn sm" data-act="seed">${t('seedBtn')}</button></div>` : '';
     return `<main class="vscreen">
-      <section class="vtop"><div class="vhead"><h1>${t('vectorsTitle')}</h1><p class="sub">${t('vectorsSub')}</p></div><div class="vlist">${rows}</div></section>
+      <section class="vtop"><div class="vhead"><div><h1>${t('vectorsTitle')}</h1><p class="sub">${t('vectorsSub')}</p></div>
+        ${CLOUD ? `<label class="showf"><span>${t('showLabel')}</span><select class="in" data-show><option value="mine" ${showMode() === 'mine' ? 'selected' : ''}>${t('showMine')}</option><option value="all" ${showMode() === 'all' ? 'selected' : ''}>${t('showAll')}</option>${
+          au.role !== 'admin' ? '' : au.users.filter((u) => u.id !== au.uid && u.role !== 'pending').map((u) => `<option value="${u.id}" ${showMode() === u.id ? 'selected' : ''}>${esc(u.name || u.email)}</option>`).join('')}</select></label>` : ''}</div><div class="vlist">${rows}</div></section>
       <section class="vnew">${seed}<div class="builder"><div class="bl"><b>${t('newVectorTitle')}</b><span class="sub">${t('newVectorSub')}</span></div>
         <div class="chev draft ${ready ? 'ready' : ''}">${chevron(S.draft, { draft: true })}</div>
         <button class="btn" data-act="fixVector" ${ready && !dup ? '' : 'disabled'}>${dup ? t('vectorExists') : t('fixVector')}</button></div>
@@ -468,7 +479,7 @@
     signOut() { ui.menu = null; Cloud.signOut(); },
     usersOpen() { ui.edit = { kind: 'users' }; render(); },
     errClose() { ui.err = ''; render(); },
-    seed() { S.zones = demoState().zones; let n = 0; ZONES.forEach((z) => S.zones[z].forEach((it) => { it.ord = ++n; if (z === 'company') { it.s.mailboxes = []; it.access = {}; it.access[au.uid] = 'shared'; } })); commit(); },
+    seed() { S.zones = demoState().zones; let n = 0; ZONES.forEach((z) => S.zones[z].forEach((it) => { it.ord = ++n; it.by = au.uid; if (z === 'company') { it.s.mailboxes = []; it.access = {}; it.access[au.uid] = 'shared'; } })); commit(); },
     vecMember(d) {
       const v = S.vectors.find((x) => x.id === ui.edit.id); v.members = v.members || [];
       const i = v.members.indexOf(d.uid); if (i < 0) v.members.push(d.uid); else v.members.splice(i, 1);
@@ -561,7 +572,7 @@
   };
 
   function newParam(zone, name) {
-    const it = { id: uid(zone[0]), name, img: '', s: {}, ord: Date.now() };
+    const it = { id: uid(zone[0]), name, img: '', s: {}, ord: Date.now(), by: au.uid };
     if (zone === 'company') { it.s = { website: '', signature: name, mailboxes: [] }; it.access = {}; it.access[au.uid] = 'shared'; it.acl = [au.uid]; }
     if (zone === 'audience' || zone === 'topic') it.acl = ['*'];
     if (zone === 'direction') { it.company = S.draft.company; it.s = { desc: '', criteria: [] }; it.acl = ((item('company', it.company) || {}).acl || [au.uid]).slice(); }
@@ -632,6 +643,7 @@
   document.addEventListener('change', (e) => {
     const el = e.target, c = cur();
     if (el.hasAttribute('data-file')) { takeImage(el.files[0]); return; }
+    if (el.hasAttribute('data-show')) { S.show = el.value; commit(); return; }
     if (el.dataset.urole) { const u = au.users.find((x) => x.id === el.dataset.urole); if (u) u.role = el.value; Cloud.setRole(el.dataset.urole, el.value); render(); return; }
     if (el.dataset.cacc) {
       const [u, cid] = el.dataset.cacc.split('|'), co = item('company', cid); co.access = co.access || {};
@@ -686,7 +698,7 @@
       auth(a) {
         Object.assign(au, { err: '' }, a);
         if (a.user) S.user = { name: a.user.name || '', email: a.user.email || '', photo: a.user.photo || '' };
-        if (a.status !== 'in') { au.users = []; ui.open = null; ui.edit = null; } else { S.view = 'vector'; S.draft = {}; }
+        if (a.status !== 'in') { au.users = []; ui.open = null; ui.edit = null; } else { S.view = 'vector'; S.draft = {}; if (a.role !== 'admin' && S.show !== 'mine' && S.show !== 'all') S.show = ''; }
         render();
       },
       // Server data replaces the matching part of the state; the screen is not redrawn under someone who is typing.
@@ -703,7 +715,7 @@
         if (name === 'params' && admin()) setTimeout(() => {
           let fixed = false;
           S.zones.company.forEach((co) => { if (!co.access) { co.access = {}; co.access[au.uid] = 'shared'; fixed = true; } });
-          ZONES.forEach((z) => S.zones[z].forEach((it) => { if (!it.acl) fixed = true; }));
+          ZONES.forEach((z) => S.zones[z].forEach((it) => { if (!it.acl) fixed = true; if (!it.by) { it.by = au.uid; fixed = true; } }));
           if (fixed) save();
         }, 0);
         if (!typing()) render();
