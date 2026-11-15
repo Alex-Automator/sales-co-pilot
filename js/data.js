@@ -5,6 +5,19 @@ const STAGES = [
 ];
 const ZONES = ['company', 'direction', 'audience', 'topic'];
 const TYPES = ['contact', 'company', 'campaign', 'task'];
+const TYPE_ICONS = {
+  contact: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  company: '<path d="M4 21V5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v16M14 9h5a1 1 0 0 1 1 1v11M3 21h18M8 8h2M8 12h2M8 16h2"/>',
+  campaign: '<path d="M3 10v4h3l7 4V6l-7 4z"/><path d="M16.5 9a4.5 4.5 0 0 1 0 6M19 6.5a8 8 0 0 1 0 11"/>',
+  task: '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
+};
+function defaultLegend() {
+  return [
+    { id: 'l1', color: '#E4572E', label: 'Hot' }, { id: 'l2', color: '#E0A100', label: 'Warm' },
+    { id: 'l3', color: '#5B7FA6', label: 'Cold' }, { id: 'l4', color: '#12995B', label: 'Partner' },
+  ];
+}
+function defaultUser() { return { name: 'Demo Operator', email: 'operator@example.com', photo: '' }; }
 const SENIORITY = ['Owner / C-level', 'VP', 'Director', 'Manager'];
 // Default grey outline pictures for parameters without an image.
 const ICONS = {
@@ -27,7 +40,7 @@ function demoState() {
     auto: { follow: false, reply: false, notify: true, draft: true }, notes: '', photo: '',
   }, o);
   return {
-    v: 2, lang: 'en', view: 'vector', active: 'v1', draft: {},
+    v: 2, legend: defaultLegend(), user: defaultUser(), lang: 'en', view: 'vector', active: 'v1', draft: {},
     vectors: [
       { id: 'v1', company: 'c1', direction: 'd1', audience: 'a1', topic: 't1', owner: 'me' },
       { id: 'v2', company: 'c3', direction: 'd4', audience: 'a3', topic: 't3', owner: 'me' },
@@ -64,19 +77,19 @@ function demoState() {
       card({ type: 'campaign', title: 'US data center GCs · directors',
         f: { sheetUrl: '', dailyCap: '8', variantA: 'Hi {firstName}, we build 4D construction simulations…', variantB: '', variantC: '' },
         auto: { follow: true, reply: false, notify: true, draft: true } }),
-      card({ type: 'company', title: 'Hartwell Builders Inc.', f: { website: 'hartwell.example', country: 'United States' } }),
+      card({ type: 'company', title: 'Hartwell Builders Inc.', color: 'l3', f: { website: 'hartwell.example', country: 'United States' } }),
       card({ type: 'task', title: 'Find MEP contractors, Sweden', next: { text: 'Build the list', date: dayOffset(2) } }),
       card({ stage: 'contacted', title: 'Erik Lindqvist', f: { jobTitle: 'CEO', company: 'Nordbygg AB', email: 'erik@nordbygg.example' },
         next: { text: 'Follow-up', date: dayOffset(0) } }),
       card({ stage: 'contacted', title: 'Maria Kowalczyk', f: { jobTitle: 'Project Director', company: 'Vistal Group' } }),
       card({ stage: 'contacted', title: 'James Okafor', f: { jobTitle: 'Owner', company: 'Okafor Mechanical' },
         auto: { follow: true, reply: false, notify: true, draft: false } }),
-      card({ stage: 'replied', title: 'Anna Bergström', awaiting: true,
+      card({ stage: 'replied', title: 'Anna Bergström', awaiting: true, color: 'l1',
         f: { jobTitle: 'COO', company: 'Fjordtek AS', email: 'anna@fjordtek.example', phone: '+47 000 00 000' },
         next: { text: 'Reply with case study', date: dayOffset(0) },
         notes: 'Tendering a data center in Q1. Asked for a relevant case and rough pricing.' }),
       card({ stage: 'replied', title: 'Tom Reilly', awaiting: true, f: { jobTitle: 'VP Ops', company: 'Calder Construction' } }),
-      card({ stage: 'meeting', title: 'Lars Holm', f: { jobTitle: 'CEO', company: 'Holm & Dahl' }, next: { text: 'Call', date: dayOffset(3) } }),
+      card({ stage: 'meeting', title: 'Lars Holm', color: 'l2', f: { jobTitle: 'CEO', company: 'Holm & Dahl' }, next: { text: 'Call', date: dayOffset(3) } }),
       card({ stage: 'proposal', title: 'Sophie Tremblay', f: { jobTitle: 'Director', company: 'Laurentide Build' } }),
       card({ stage: 'negotiation', title: 'David Chen', f: { jobTitle: 'Owner', company: 'Pacific Core DC' },
         next: { text: 'Send revised scope', date: dayOffset(-2) } }),

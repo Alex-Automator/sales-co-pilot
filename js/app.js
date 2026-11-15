@@ -1,12 +1,12 @@
-// Sales-Co-pilot, revision 2 of the first screen: interface on demo data, saved in the browser.
+// Sales-Co-pilot, revision 3: interface on demo data, saved in the browser.
 // No sign-in, mail, Sheets or AI yet: those arrive in later stages (see docs/SPEC.md).
 (function () {
   const KEY = 'sales-co-pilot-v2';
   let S = load();
-  let ui = { open: null, edit: null, q: '', ftype: 'all', fdue: false, zone: 'company', dbtab: 'library', delArm: false, adding: null, fresh: null, popped: null };
+  let ui = { open: null, edit: null, q: '', ftype: 'all', fdue: false, zone: 'company', dbtab: 'library', delArm: false, adding: null, fresh: null, popped: null, menu: null, legendEdit: false, fcolor: '' };
 
   function load() {
-    try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.v === 2) return s; } catch (e) {}
+    try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.v === 2) { s.legend = s.legend || defaultLegend(); s.user = s.user || defaultUser(); return s; } } catch (e) {}
     return demoState();
   }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
@@ -38,21 +38,31 @@
     return one('c1', n.reply, t('toReply')) + one('c2', n.due, t('due'));
   }
 
+  const svg = (paths) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+  const legendOf = (id) => S.legend.find((l) => l.id === id);
+  const mi = (act, label, extra, off) => `<button class="mi" data-act="${act}" ${off ? 'disabled' : ''}><span>${label}</span>${extra ? `<small>${extra}</small>` : ''}</button>`;
+
   // ---------- views ----------
   function top() {
     const tabs = ['vector', 'board', 'analytics', 'database'].map((v) =>
       `<button class="tab ${S.view === v ? 'on' : ''}" data-act="view" data-v="${v}" ${v === 'board' && !activeVector() ? 'disabled' : ''}>${t(v)}</button>`).join('');
     const av = activeVector();
     const crumb = S.view === 'board' && av ? ZONES.map((z) => esc((item(z, av[z]) || {}).name || '—')).join(' › ') : '';
-    return `<header class="top"><div class="logo"><span class="dot"></span>Sales-Co-pilot</div><nav>${tabs}</nav>
-      <div class="crumb" title="${crumb}">${crumb}</div>
-      <div class="right"><button class="lang" data-act="lang"><b class="${S.lang === 'en' ? 'on' : ''}">EN</b> <b class="${S.lang === 'uk' ? 'on' : ''}">UA</b></button></div></header>`;
+    const u = S.user, ava = u.photo ? `<img src="${u.photo}" alt="">` : esc(initials(u.name));
+    const langX = `<b class="${S.lang === 'en' ? 'on' : ''}">EN</b> / <b class="${S.lang === 'uk' ? 'on' : ''}">UA</b>`;
+    const later = (n) => `${t('stage')} ${n}`;
+    return `<header class="top"><div class="brand" tabindex="0"><div class="logo"><span class="dot"></span><span class="bn">Sales-Co-pilot</span><span class="car">▾</span></div>
+        <div class="menu"><div class="mh">${t('appSettings')}</div>${mi('lang', t('setLanguage'), langX)}${mi('legendOpen', t('setColors'), '', !activeVector())}
+        ${mi('', t('setUsers'), later(2), 1)}${mi('', t('setMail'), later(3), 1)}${mi('', t('setAI'), later(4), 1)}<hr>${mi('reset', t('reset'))}</div></div>
+      <nav>${tabs}</nav><div class="crumb" title="${crumb}">${crumb}</div>
+      <div class="right"><button class="userbtn" data-act="userMenu"><span class="un"><b>${esc(u.name)}</b><small>${esc(u.email)}</small></span><span class="ava">${ava}</span></button>
+        ${ui.menu === 'user' ? `<div class="menu show"><div class="mh">${esc(u.email)}</div>${mi('editProfile', t('myProfile'))}${mi('lang', t('setLanguage'), langX)}<hr>${mi('', t('signOut'), later(2), 1)}</div>` : ''}</div></header>`;
   }
 
   function chevron(v, opts) {
     return ZONES.map((z, i) => {
       const it = item(z, v[z]);
-      if (!it) return `<span class="seg empty" style="--i:${i}"><span class="sn">${i + 1} · ${t('zone_' + z)}</span></span>`;
+      if (!it) return `<span class="seg empty" style="--i:${i}" title="${opts.draft ? t('tip_' + z) : ''}"><span class="sn">${i + 1} · ${t('zone_' + z)}</span></span>`;
       const act = opts.draft ? `data-act="unpick" data-zone="${z}" title="${esc(it.name)} — ${t('clear')}"` : `title="${esc(it.name)}"`;
       return `<span class="seg ${ui.popped === z && opts.draft ? 'pop' : ''}" style="--i:${i}" ${act}>${pic(z, it, 'sm')}<span class="sn">${esc(it.name)}</span></span>`;
     }).join('');
@@ -78,7 +88,7 @@
       const adding = !canAdd ? '' : ui.adding === z
         ? `<input class="in addin" data-add="${z}" placeholder="${t('addNew')}" autofocus>`
         : `<button class="add" data-act="addItem" data-zone="${z}">${t('add')}</button>`;
-      return `<section class="zone"><div class="vh">${i + 1} · ${t('zone_' + z)}</div><div class="zlist">${items}${hint}${adding}</div></section>`;
+      return `<section class="zone"><div class="vh tip" tabindex="0">${i + 1} · ${t('zone_' + z)}<span class="q">?</span><span class="tt">${t('tip_' + z)}</span></div><div class="zlist">${items}${hint}${adding}</div></section>`;
     }).join('');
 
     const ready = draftComplete(), dup = ready && sameVector(S.draft);
@@ -102,9 +112,12 @@
     const sub = c.type === 'contact' ? [c.f.jobTitle, c.f.company].filter(Boolean).join(' · ')
       : c.type === 'company' ? [c.f.country, c.f.website].filter(Boolean).join(' · ')
       : c.type === 'campaign' ? (c.f.dailyCap ? `${c.f.dailyCap} / day` : '') : (c.next.text || '');
-    return `<article class="card" draggable="true" data-card="${c.id}" data-act="open" data-id="${c.id}" style="border-left-color:${stageColor(c.stage)}">
-      <div class="ct"><span class="ty">${t('type_' + c.type)}</span><span class="bd">${badges.join('')}</span></div>
-      <div class="cn">${esc(c.title) || '—'}</div>${sub ? `<div class="cs">${esc(sub)}</div>` : ''}</article>`;
+    const lg = legendOf(c.color);
+    const av = c.type === 'contact' || c.type === 'company'
+      ? `<span class="cav">${c.photo ? `<img src="${c.photo}" alt="">` : esc(initials(c.type === 'contact' ? c.title : c.title))}</span>` : '';
+    return `<article class="card t-${c.type}" draggable="true" data-card="${c.id}" data-act="open" data-id="${c.id}" style="border-left-color:${stageColor(c.stage)};${lg ? `--cc:${lg.color}` : ''}" ${lg ? `title="${esc(lg.label)}"` : ''}>
+      <div class="ct"><span class="tyw"><span class="tyi">${svg(TYPE_ICONS[c.type])}</span><span class="ty">${t('type_' + c.type)}</span></span><span class="bd">${badges.join('')}</span></div>
+      <div class="crow">${av}<div><div class="cn">${esc(c.title) || '—'}</div>${sub ? `<div class="cs">${esc(sub)}</div>` : ''}</div></div></article>`;
   }
 
   function vBoard() {
@@ -112,10 +125,15 @@
     if (!av) { S.view = 'vector'; return vVector(); }
     const q = ui.q.trim().toLowerCase();
     const cards = S.cards.filter((c) => inVector(c, av))
-      .filter((c) => ui.ftype === 'all' || c.type === ui.ftype).filter((c) => !ui.fdue || isDue(c))
+      .filter((c) => ui.ftype === 'all' || c.type === ui.ftype).filter((c) => !ui.fdue || isDue(c)).filter((c) => !ui.fcolor || c.color === ui.fcolor)
       .filter((c) => !q || (c.title + ' ' + Object.values(c.f).join(' ')).toLowerCase().includes(q));
     const chips = ['all'].concat(TYPES).map((x) =>
-      `<button class="chip ${ui.ftype === x ? 'on' : ''}" data-act="ftype" data-v="${x}">${x === 'all' ? t('allTypes') : t('type_' + x)}</button>`).join('');
+      `<button class="chip ${ui.ftype === x ? 'on' : ''}" data-act="ftype" data-v="${x}">${x === 'all' ? '' : `<span class="tyi">${svg(TYPE_ICONS[x])}</span>`}${x === 'all' ? t('allTypes') : t('type_' + x)}</button>`).join('');
+    const legend = ui.legendEdit
+      ? S.legend.map((l) => `<span class="lge"><input type="color" value="${l.color}" data-lgcolor="${l.id}" title="${t('colour')}"><input class="in" data-lgname="${l.id}" value="${esc(l.label)}" placeholder="${t('labelName')}"><button class="link" data-act="lgRemove" data-id="${l.id}">×</button></span>`).join('')
+        + `<button class="add inl" data-act="lgAdd">${t('addColour')}</button><button class="btn sm" data-act="legendDone">${t('doneLegend')}</button>`
+      : S.legend.map((l) => `<button class="lg ${ui.fcolor === l.id ? 'on' : ''}" data-act="fcolor" data-id="${l.id}" title="${t('legendHint')}"><i style="background:${l.color}"></i>${esc(l.label)}</button>`).join('')
+        + `<button class="btn ghost sm" data-act="legendEdit">${t('editLegend')}</button>`;
     const cols = STAGES.map(([s, color]) => {
       const cs = cards.filter((c) => c.stage === s);
       const adding = ui.adding === 'st:' + s
@@ -126,7 +144,8 @@
     }).join('');
     return `<div class="tools"><input class="in search" data-search placeholder="${t('search')}" value="${esc(ui.q)}">${chips}
       <button class="chip ${ui.fdue ? 'on' : ''}" data-act="fdue">${t('dueToday')}</button>
-      <button class="btn sm" data-act="addCard" data-stage="new">${t('newCard')}</button></div><main class="board">${cols}</main>`;
+      <button class="btn sm" data-act="addCard" data-stage="new">${t('newCard')}</button></div><main class="board">${cols}</main>
+      <div class="legend"><span class="ty">${t('colours')}</span>${legend}</div>`;
   }
 
   function field(c, key, label, area) {
@@ -159,6 +178,8 @@
       <div class="mright">
         <div class="row2"><label class="fl"><span>${t('type')}</span><select class="in" data-top="type">${opts(TYPES, c.type, 'type_')}</select></label>
         <label class="fl"><span>${t('stage')}</span><select class="in" data-top="stage">${opts(STAGES.map((x) => x[0]), c.stage, 'st_')}</select></label></div>
+        <div class="fl"><span>${t('colour')}</span><div class="sws"><button class="swt none ${c.color ? '' : 'on'}" data-act="setColor" data-id="" title="${t('none')}"></button>${
+          S.legend.map((l) => `<button class="swt ${c.color === l.id ? 'on' : ''}" style="--cc:${l.color}" data-act="setColor" data-id="${l.id}" title="${esc(l.label)}"></button>`).join('')}</div></div>
         <div class="box"><div class="bh">${t('nextStep')}</div><input class="in" data-next="text" value="${esc(c.next.text)}">
           <label class="fl"><span>${t('nextDate')}</span><input class="in" type="date" data-next="date" value="${esc(c.next.date)}"></label>
           <button class="tog" data-act="awaiting"><span class="sw ${c.awaiting ? 'on' : ''}"><i></i></span><span>${t('awaiting')}</span></button></div>
@@ -195,7 +216,16 @@
   function vEditModal() {
     const e = ui.edit; if (!e) return '';
     let left, right;
-    if (e.kind === 'param') {
+    if (e.kind === 'profile') {
+      const u = S.user;
+      left = `<div class="bh">${t('profile')}</div><div class="imgrow"><div class="photo" tabindex="0" data-photo>${u.photo ? `<img src="${u.photo}" alt="">` : esc(initials(u.name))}</div>
+          <div><label class="btn ghost sm filebtn">${t('uploadImage')}<input type="file" accept="image/*" data-file hidden></label>
+          ${u.photo ? ` <button class="btn ghost sm" data-act="rmUserPhoto">${t('removeImage')}</button>` : ''}<p class="sub small">${t('photoHint')}</p></div></div>
+        <label class="fl"><span>${t('name')}</span><input class="in big" data-u="name" value="${esc(u.name)}"></label>
+        <label class="fl"><span>${t('email')}</span><input class="in" data-u="email" value="${esc(u.email)}"></label>`;
+      right = `<div class="box"><div class="bh">${t('role')}</div><b>${t('admin')}</b></div><div class="box"><p class="sub">${t('profileNote')}</p></div>
+        <div class="acts"><button class="btn sm" data-act="closeEdit">${t('close')}</button></div>`;
+    } else if (e.kind === 'param') {
       const it = item(e.zone, e.id); if (!it) return '';
       const used = S.vectors.filter((v) => v[e.zone] === it.id).length;
       left = `<div class="bh">${t('zone_' + e.zone)}</div><div class="imgrow"><div class="photo sq" tabindex="0" data-photo title="${t('imageHint')}">${pic(e.zone, it, 'xl')}</div>
@@ -275,6 +305,16 @@
   const curParam = () => (ui.edit && ui.edit.kind === 'param' ? item(ui.edit.zone, ui.edit.id) : null);
   const A = {
     view(d) { S.view = d.v; ui.adding = null; commit(); },
+    userMenu() { ui.menu = ui.menu === 'user' ? null : 'user'; render(); },
+    editProfile() { ui.edit = { kind: 'profile' }; ui.menu = null; render(); },
+    rmUserPhoto() { S.user.photo = ''; commit(); },
+    legendOpen() { S.view = 'board'; ui.legendEdit = true; commit(); },
+    legendEdit() { ui.legendEdit = true; render(); },
+    legendDone() { ui.legendEdit = false; render(); },
+    lgAdd() { S.legend.push({ id: uid('l'), color: '#7A736A', label: '' }); commit(); },
+    lgRemove(d) { S.legend = S.legend.filter((l) => l.id !== d.id); S.cards.forEach((c) => { if (c.color === d.id) c.color = ''; }); if (ui.fcolor === d.id) ui.fcolor = ''; commit(); },
+    fcolor(d) { ui.fcolor = ui.fcolor === d.id ? '' : d.id; render(); },
+    setColor(d) { cur().color = d.id; commit(); },
     lang() { S.lang = S.lang === 'en' ? 'uk' : 'en'; commit(); },
     pick(d) {
       if (S.draft[d.zone] === d.id) delete S.draft[d.zone]; else { S.draft[d.zone] = d.id; ui.popped = d.zone; }
@@ -327,7 +367,7 @@
       S.cards = S.cards.filter((c) => c.id !== ui.open); ui.open = null; commit();
     },
     rmDoc(d) { S.docs = S.docs.filter((x) => x.id !== d.id); commit(); },
-    reset() { S = demoState(); ui.open = null; ui.edit = null; commit(); },
+    reset() { S = demoState(); ui.open = null; ui.edit = null; ui.fcolor = ''; ui.legendEdit = false; commit(); },
   };
 
   function newParam(zone, name) {
@@ -338,20 +378,22 @@
   }
   // Store a pasted or uploaded picture, scaled down, on the open card or parameter.
   function takeImage(file) {
-    const c = cur(), p = curParam(); if (!file || (!c && !p)) return;
+    const c = cur(), p = curParam(), prof = ui.edit && ui.edit.kind === 'profile'; if (!file || (!c && !p && !prof)) return;
     const img = new Image();
     img.onload = () => {
       const k = Math.min(1, 200 / Math.max(img.width, img.height)), cv = document.createElement('canvas');
       cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
       cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
-      if (p) p.img = cv.toDataURL('image/png'); else c.photo = cv.toDataURL('image/jpeg', 0.85);
+      if (prof) S.user.photo = cv.toDataURL('image/jpeg', 0.85); else if (p) p.img = cv.toDataURL('image/png'); else c.photo = cv.toDataURL('image/jpeg', 0.85);
       URL.revokeObjectURL(img.src); commit();
     };
     img.src = URL.createObjectURL(file);
   }
 
   document.addEventListener('click', (e) => {
-    const el = e.target.closest('[data-act]'); if (!el || el.tagName === 'A') return;
+    const el = e.target.closest('[data-act]');
+    if (ui.menu && !e.target.closest('.right')) { ui.menu = null; if (!el) { render(); return; } }
+    if (!el || el.tagName === 'A' || el.disabled) return;
     const fn = A[el.dataset.act]; if (fn) fn(el.dataset, e);
   });
   document.addEventListener('keydown', (e) => {
@@ -383,6 +425,9 @@
   document.addEventListener('input', (e) => {
     const el = e.target, c = cur(), p = curParam();
     if (el.hasAttribute('data-search')) { ui.q = el.value; const pos = el.selectionStart; render(); const n = document.querySelector('[data-search]'); n.focus(); n.setSelectionRange(pos, pos); return; }
+    if (el.dataset.u) { S.user[el.dataset.u] = el.value; save(); return; }
+    if (el.dataset.lgname) { legendOf(el.dataset.lgname).label = el.value; save(); return; }
+    if (el.dataset.lgcolor) { legendOf(el.dataset.lgcolor).color = el.value; save(); return; }
     if (p && el.dataset.s) { p.s[el.dataset.s] = el.value; save(); return; }
     if (p && el.hasAttribute('data-pname')) { p.name = el.value; save(); return; }
     if (!c) return;
