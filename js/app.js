@@ -7,6 +7,7 @@
   const PREFS = ['lang', 'view', 'active', 'draft', 'widgets', 'guideSeen', 'show'];
   const au = { status: CLOUD ? 'loading' : 'in', uid: 'me', role: 'admin', super: !CLOUD, ownerUid: '', users: [], guards: {}, err: '' };
   let S = load();
+  if (!S.send) S.send = defaultSend();
   let ui = { open: null, edit: null, q: '', ftype: 'all', fdue: false, zone: 'company', dbtab: 'library', delArm: false, adding: null, fresh: null, popped: null, menu: null, legendEdit: false, fcolor: '', ctab: 'details', lq: '', imp: null, prev: -1, checkLeft: 0, cal: 0, ai: !S.guideSeen, aiView: 'home', aiLog: [] };
 
   function load() {
@@ -47,7 +48,8 @@
   const tally = (cs) => ({ reply: cs.filter((c) => c.awaiting && !closed(c)).length, due: cs.filter(isDue).length });
   // A mailbox belongs to the operator who added it; operators see and use only their own, the admin sees all.
   const mineMb = (m) => (m.owner || '') === au.uid || (!CLOUD);
-  const sigOf = (co, email) => ((((co && co.s.mailboxes) || []).find((m) => m.email === email) || {}).sig || '');
+  // The signature of a mailbox, with its opt-out line and company details when those are switched on.
+  const sigOf = (co, email) => { const m = ((co && co.s.mailboxes) || []).find((x) => x.email === email) || {}; return [m.sig, m.footOn && m.foot].filter(Boolean).join('\n\n'); };
   const myMailboxes = (co) => ((co && co.s.mailboxes) || []).filter(mineMb);
   const primaryMailbox = (co) => { const m = myMailboxes(co); return (m.find((x) => x.primary) || m[0] || {}).email || ''; };
   const admin = () => au.role === 'admin';
@@ -116,7 +118,7 @@
     const later = (n) => `${t('stage')} ${n}`;
     return `<header class="top"><div class="brand" tabindex="0"><div class="logo"><svg class="mark" viewBox="0 0 30 22"><path d="M0 0h7l7 11-7 11H0l7-11z" opacity=".45"/><path d="M11 0h9l10 11-10 11h-9l8-11z"/></svg><span class="bn"><b>VECTOR</b><small>Sales-co-pilot</small></span><span class="car">▾</span></div>
         <div class="menu"><div class="mh">${t('appSettings')}</div>${mi('lang', t('setLanguage'), langX)}${mi('legendOpen', t('setColors'), '', !activeVector())}
-        ${CLOUD ? mi('usersOpen', t('setUsers'), '', au.role !== 'admin') : mi('', t('setUsers'), later(2), 1)}${mi('', t('setMail'), later(3), 1)}${mi('', t('setAI'), later(4), 1)}${CLOUD ? '' : `<hr>${mi('reset', t('reset'))}`}<div class="ver">${t('version')} ${VERSION}</div></div></div>
+        ${CLOUD ? mi('usersOpen', t('setUsers'), '', au.role !== 'admin') : mi('', t('setUsers'), later(2), 1)}${mi('sendOpen', t('setSend'))}${mi('', t('setAI'), later(4), 1)}${CLOUD ? '' : `<hr>${mi('reset', t('reset'))}`}<div class="ver">${t('version')} ${VERSION}</div></div></div>
       <nav>${tabs}</nav><div class="crumb" title="${crumb}">${crumb}</div>
       <div class="right"><button class="aibtn ${ui.ai ? 'on' : ''}" data-act="aiToggle">${svg(UI_ICONS.spark)}<span>${t('aiHelper')}</span></button><button class="userbtn" data-act="userMenu"><span class="un"><b>${esc(u.name)}</b><small>${esc(u.email)}</small></span><span class="ava">${ava}</span></button>
         ${ui.menu === 'user' ? `<div class="menu show"><div class="mh">${esc(u.email)}${CLOUD ? ' · ' + (au.super ? t('acc_super') : t('acc_' + au.role)) : ''}</div>${CLOUD ? '' : mi('editProfile', t('myProfile'))}${mi('lang', t('setLanguage'), langX)}<hr>${CLOUD ? mi('signOut', t('signOut')) : mi('', t('signOut'), later(2), 1)}</div>` : ''}</div></header>`;
@@ -295,7 +297,15 @@
 
   // ---------- letters: one letter or a chain, written, checked and approved before anything is sent ----------
   const newStep = (day) => ({ id: uid('s'), day, subject: '', body: '', status: 'draft' });
-  const seqOf = (c) => { if (!c.seq) c.seq = { from: '', steps: [newStep(0), newStep(4), newStep(9)] }; return c.seq; };
+  // Variant A is always there; B and C are added to test another approach on a part of the recipients.
+  const seqOf = (c) => {
+    if (!c.seq) c.seq = { from: '', steps: [newStep(0), newStep(4), newStep(9)] };
+    const s = c.seq; if (!s.alt) s.alt = {}; if (!s.modes) s.modes = { A: 'claude' }; if (!s.lang) s.lang = 'en'; return s;
+  };
+  const varsOf = (s) => ['A'].concat(['B', 'C'].filter((k) => s.alt[k]));
+  const curVar = (s) => (varsOf(s).includes(ui.var) ? ui.var : 'A');
+  const stepsOf = (c) => { const s = seqOf(c), k = curVar(s); return k === 'A' ? s.steps : s.alt[k].steps; };
+  const langName = (code) => { try { const n = new Intl.DisplayNames([S.lang === 'uk' ? 'uk' : 'en'], { type: 'language' }).of(code); return n[0].toUpperCase() + n.slice(1); } catch (e) { return code; } };
   function sampleFor(c) {
     if (c.type === 'contact') { const p = c.title.split(' '); return { firstName: p[0], lastName: p.slice(1).join(' '), company: c.f.company, jobTitle: c.f.jobTitle, city: '' }; }
     const l = S.leads.find((x) => x.cid === c.id && !blockedWhy(x)); return l ? l.f : { firstName: 'Anna', lastName: 'Berg', company: 'Example AS', jobTitle: 'CEO', city: 'Oslo' };
@@ -306,19 +316,25 @@
   function vSequence(c) {
     const seq = seqOf(c), v = S.vectors.find((x) => x.id === c.vid), co = v ? item('company', v.company) : null, mbs = myMailboxes(co);
     const from = mbs.length ? `<select class="in" data-seqfrom>${mbs.map((m) => `<option ${((seq.from || primaryMailbox(co)) === m.email) ? 'selected' : ''}>${esc(m.email)}</option>`).join('')}</select>` : `<span class="sub">${t('noMailbox')}</span>`;
-    const done = seq.steps.filter((x) => x.status === 'approved').length, smp = Object.assign({}, sampleFor(c), { signature: sigOf(co, seq.from || primaryMailbox(co)) });
-    const steps = seq.steps.map((st, i) => `<div class="step st-${st.status}" data-step="${i}"><div class="sth"><b>${t('letter')} ${i + 1}</b>
+    const list = stepsOf(c), vs = varsOf(seq), k = curVar(seq), nextV = ['B', 'C'].find((x) => !seq.alt[x]), mode = seq.modes[k] || 'claude';
+    const vtabs = `<div class="vtabs">${vs.map((x) => `<button class="chip ${x === k ? 'on' : ''}" data-act="seqTab" data-v="${x}">${t('variant')} ${x}</button>`).join('')}
+      ${nextV ? `<button class="chip dash" data-act="seqTabAdd" title="${t('variantHint')}">+ ${t('variant')} ${nextV}</button>` : ''}${k !== 'A' ? `<button class="link small" data-act="seqTabDel">${t('removeVariant')} ${k}</button>` : ''}</div>
+      <div class="row2 vset"><label class="fl"><span>${t('whoWrites')}</span><select class="in" data-seqmode>${['claude', 'gpt', 'manual'].map((m) => `<option value="${m}" ${mode === m ? 'selected' : ''}>${t('mode_' + m)}</option>`).join('')}</select></label>
+        <label class="fl"><span>${t('sendLang')}</span><select class="in" data-seqlang>${LANGS.map((l) => `<option value="${l}" ${seq.lang === l ? 'selected' : ''}>${esc(langName(l))}</option>`).join('')}</select></label></div>
+      <p class="sub small">${t('modeH_' + mode)}${seq.lang !== 'en' ? ' ' + t('langNote').replace('{l}', langName(seq.lang)) : ''}${vs.length > 1 ? ' ' + t('splitNote').replace('{n}', vs.length) : ''}</p>`;
+    const done = list.filter((x) => x.status === 'approved').length, smp = Object.assign({}, sampleFor(c), { signature: sigOf(co, seq.from || primaryMailbox(co)) });
+    const steps = list.map((st, i) => `<div class="step st-${st.status}" data-step="${i}"><div class="sth"><b>${t('letter')} ${i + 1}</b>
         <label class="dayl" title="${t('dayHint')}">${t('dayN')} <input class="in" type="number" min="0" data-seq="${i}|day" value="${+st.day || 0}" ${i === 0 ? 'disabled' : ''}></label>
-        <span class="stt">${t('seq_' + st.status)}</span>${seq.steps.length > 1 ? `<button class="link" data-act="seqDel" data-i="${i}">×</button>` : ''}</div>
+        <span class="stt">${t('seq_' + st.status)}</span>${list.length > 1 ? `<button class="link" data-act="seqDel" data-i="${i}">×</button>` : ''}</div>
       <input class="in" data-seq="${i}|subject" placeholder="${t('subject')}" value="${esc(st.subject)}">
       <textarea class="in" rows="6" data-seq="${i}|body" placeholder="${t('body')}">${esc(st.body)}</textarea>
       <div class="vars">${SEQ_VARS.map((x) => `<button class="chip" data-act="seqVar" data-i="${i}" data-v="${x}">{{${x}}}</button>`).join('')}</div>
-      <div class="acts tight"><button class="btn ghost sm" disabled title="${t('stage')} 3">${t('aiDraft')}</button><button class="btn ghost sm" disabled title="${t('stage')} 3">${t('aiReview')}</button>
+      <div class="acts tight">${mode === 'manual' ? '' : `<button class="btn ghost sm" disabled title="${t('stage')} 3">${t('aiDraft')}</button>`}<button class="btn ghost sm" disabled title="${t('stage')} 3">${t('aiReview')}</button>
         <button class="btn ghost sm" data-act="seqPreview" data-i="${i}">${t('preview')}</button>
         <button class="btn sm" data-act="seqApprove" data-i="${i}" ${st.status === 'approved' || (st.subject.trim() && st.body.trim()) ? '' : 'disabled'}>${st.status === 'approved' ? t('unapprove') : t('approve')}</button></div>
       ${ui.prev === i ? `<div class="prevbox"><small>${t('previewFor')} ${esc([smp.firstName, smp.lastName].filter(Boolean).join(' '))}</small><b>${esc(fillVars(st.subject, smp))}</b><pre>${esc(fillVars(withSig(st.body, smp.signature), smp))}</pre></div>` : ''}</div>`).join('');
-    return `<div class="seqhead"><label class="fromf"><span>${t('fromMailbox')}</span>${from}</label><span class="ty">${done} / ${seq.steps.length} ${t('approvedOf')}</span></div>
-      ${steps}<button class="add" data-act="seqAdd">${t('addLetter')}</button><p class="sub small">${t('seqNote')}</p>`;
+    return `<div class="seqhead"><label class="fromf"><span>${t('fromMailbox')}</span>${from}</label><span class="ty">${done} / ${list.length} ${t('approvedOf')}</span></div>
+      ${vtabs}${steps}<button class="add" data-act="seqAdd">${t('addLetter')}</button><p class="sub small">${t('seqNote')}</p>`;
   }
 
   function vCardModal() {
@@ -363,8 +379,8 @@
   }
 
   // Settings of one parameter (opened with the three dots).
-  const sIn = (it, k, label, area) => `<label class="fl"><span>${label}</span>${area
-    ? `<textarea class="in" data-s="${k}" rows="3">${esc(it.s[k] || '')}</textarea>` : `<input class="in" data-s="${k}" value="${esc(it.s[k] || '')}">`}</label>`;
+  const sIn = (it, k, label, area, ph) => `<label class="fl"><span>${label}</span>${area
+    ? `<textarea class="in" data-s="${k}" rows="3" placeholder="${esc(ph || '')}">${esc(it.s[k] || '')}</textarea>` : `<input class="in" data-s="${k}" placeholder="${esc(ph || '')}" value="${esc(it.s[k] || '')}">`}</label>`;
   const sSel = (it, k, label, vals, pre) => `<label class="fl"><span>${label}</span><select class="in" data-s="${k}"><option value=""></option>${
     vals.map((v) => `<option value="${v}" ${it.s[k] === v ? 'selected' : ''}>${t(pre + v)}</option>`).join('')}</select></label>`;
   function paramSettings(zone, it) {
@@ -372,7 +388,9 @@
       const boxes = (it.s.mailboxes || []).map((m, i) => (!manages(it) && !mineMb(m) ? '' : `<div class="mbx"><div class="lrow"><button class="radio ${m.primary ? 'on' : ''}" data-act="mbPrimary" data-i="${i}" title="${t('primary')}"></button>
         <span class="lt">${esc(m.email)}${CLOUD && m.owner !== au.uid ? ` <small class="ownr">${esc(userName(m.owner))}</small>` : ''}</span>${m.primary ? `<span class="ty">${t('primary')}</span>` : ''}<button class="link" data-act="mbRemove" data-i="${i}">×</button></div>
         <textarea class="in" rows="3" data-mbsig="${i}" placeholder="${t('mbSignature')}">${esc(m.sig || '')}</textarea>
-        ${m.sig ? '' : `<button class="link small" data-act="mbSigPlain" data-i="${i}">${t('sigPlain')}</button>`}</div>`)).join('');
+        ${m.sig ? '' : `<button class="link small" data-act="mbSigPlain" data-i="${i}">${t('sigPlain')}</button>`}
+        <button class="tog" data-act="mbFoot" data-i="${i}"><span class="sw ${m.footOn ? 'on' : ''}"><i></i></span><span>${t('footOn')}<small>${t('footHint')}</small></span></button>
+        ${m.footOn ? `<textarea class="in" rows="3" data-mbfoot="${i}" placeholder="${t('footPh')}">${esc(m.foot || '')}</textarea>` : ''}</div>`)).join('');
       return sIn(it, 'website', t('website')) + `<div class="fl"><span>${t('mailboxes')}</span>${boxes}<input class="in" data-listadd="mailboxes" placeholder="${t('addMailbox')}"><p class="sub small">${t('sigHint')}</p></div>`;
     }
     if (zone === 'direction') {
@@ -385,7 +403,13 @@
         + `<div class="row2">${sSel(it, 'role', t('audRole'), ['decision', 'influence', 'user'], 'role_')}${sSel(it, 'tone', t('audTone'), ['formal', 'neutral', 'informal'], 'tone_')}</div>`
         + `<div class="row2">${sIn(it, 'regions', t('audRegions'))}${sIn(it, 'language', t('audLanguage'))}</div>` + sIn(it, 'pains', t('audPains'), 1) + sIn(it, 'notes', t('audNotes'), 1);
     }
-    return sIn(it, 'hook', t('topicHook'), 1) + sIn(it, 'keywords', t('topicKeywords')) + sIn(it, 'proof', t('topicProof'));
+    // The brief is what AI reads before it writes a letter in this vector: every field is a hint, none is required.
+    const tones = TONES.map((x) => `<button class="chip ${(it.s.tones || []).includes(x) ? 'on' : ''}" data-act="toneToggle" data-v="${x}" title="${t('toneH_' + x)}">${t('tone2_' + x)}</button>`).join('');
+    return `<div class="brief"><div class="bh">${t('briefTitle')}</div><p class="sub small">${t('briefNote')}</p></div>`
+      + sIn(it, 'hook', t('topicHook'), 1, t('ph_hook')) + sIn(it, 'offer', t('briefOffer'), 1, t('ph_offer'))
+      + `<div class="fl"><span>${t('briefTone')}</span><div class="chips">${tones}</div></div>`
+      + sIn(it, 'cta', t('briefCta'), 0, t('ph_cta')) + sIn(it, 'proof', t('topicProof'), 0, t('ph_proof'))
+      + sIn(it, 'avoid', t('briefAvoid'), 1, t('ph_avoid')) + sIn(it, 'sample', t('briefSample'), 1, t('ph_sample')) + sIn(it, 'keywords', t('topicKeywords'));
   }
   const accVal = (co, u) => (managersOf(co).includes(u.id) ? 'manage' : (co.access || {})[u.id] || '');
   const accSel = (co, u) => `<select class="in" data-cacc="${u.id}|${co.id}">${[['', 'accNone'], ['shared', 'accShared'], ['own', 'accOwn']].concat(sup() && u.role === 'admin' ? [['manage', 'accManage']] : [])
@@ -407,6 +431,28 @@
       }).join('');
       return `<div class="overlay" data-act="closeBg"><div class="modal one" role="dialog"><button class="mclose" data-act="closeAny" aria-label="Close">×</button><div class="mleft"><div class="bh">${t('usersTitle')}</div><p class="sub">${t('usersNote')}</p><p class="sub small">${t('rolesNote')}</p><p class="sub small">${t('modeNote')}</p>${rows}
         <div class="acts"><button class="btn sm" data-act="closeEdit">${t('close')}</button></div></div></div></div>`;
+    }
+    if (e.kind === 'send') {
+      const s = S.send, can = !CLOUD || sup(), dis = can ? '' : 'disabled';
+      const custom = Object.keys(RISK[s.level]).some((k) => s[k] !== RISK[s.level][k]);
+      const num = (k) => `<input class="in nin" type="number" min="${SEND_LIMITS[k][0]}" max="${SEND_LIMITS[k][1]}" data-send="${k}" value="${+s[k]}" ${dis}>`;
+      const row = (label, body) => `<div class="srow"><span class="lt">${label}</span><span class="sv">${body}</span></div>`;
+      const tg = (k) => `<button class="tog" data-act="sendTog" data-k="${k}" ${dis}><span class="sw ${s[k] ? 'on' : ''}"><i></i></span><span>${t('send_' + k)}<small>${t('send_' + k + 'H')}</small></span></button>`;
+      const lock = (k) => `<div class="tog lock"><span class="sw on"><i></i></span><span>${t(k)}<small>${t('sendLocked')}</small></span></div>`;
+      const sum = t('sendSum').replace('{start}', s.start).replace('{step}', s.step).replace('{cap}', s.cap).replace('{a}', s.gapMin).replace('{b}', s.gapMax);
+      return `<div class="overlay" data-act="closeBg"><div class="modal one" role="dialog"><button class="mclose" data-act="closeAny" aria-label="Close">×</button><div class="mleft">
+        <div class="bh">${t('setSend')}</div><p class="sub">${t('sendNote')}</p>${can ? '' : `<p class="sub small">${t('sendAdminOnly')}</p>`}
+        <div class="risk" style="--rc:${RISK_COLORS[s.level]}"><div class="rhead"><b>${t('risk_' + s.level)}</b>${custom ? `<span class="ty">${t('riskCustom')}</span>` : ''}</div>
+          <input type="range" min="0" max="4" step="1" value="${s.level}" data-sendlevel ${dis} aria-label="${t('setSend')}">
+          <div class="rends"><span>${t('riskLow')}</span><span>${t('riskHigh')}</span></div><p class="sub small">${t('riskH_' + s.level)}</p><p class="rsum">${sum}</p></div>
+        <div class="bh sp2">${t('sendPerBox')}</div>
+        ${row(t('sendStart'), num('start'))}${row(t('sendStep'), '+ ' + num('step'))}${row(t('sendCap'), num('cap'))}${row(t('sendGap'), num('gapMin') + ' – ' + num('gapMax'))}
+        ${row(t('sendDomain'), num('perDomain'))}${row(t('sendBounce'), num('bounce') + ' %')}
+        <div class="bh sp2">${t('sendWhen')}</div>
+        ${row(t('sendHours'), num('from') + ' – ' + num('to'))}${tg('workdays')}${tg('jitter')}
+        <div class="bh sp2">${t('sendHow')}</div>${tg('coldSecondary')}${tg('noTrack')}
+        <div class="bh sp2">${t('sendAlways')}</div>${lock('lockApprove')}${lock('lockReply')}${lock('lockBounce')}${lock('lockStop')}
+        <p class="sub small">${t('seqNote')}</p><div class="acts"><button class="btn sm" data-act="closeEdit">${t('close')}</button></div></div></div></div>`;
     }
     if (e.kind === 'profile') {
       const u = S.user;
@@ -617,12 +663,28 @@
         awaiting: false, auto: { follow: false, reply: false, notify: true, draft: true }, notes: '', photo: '', blocked: l.blocked || '', okEmail: l.okEmail || '' };
       S.cards.push(k); l.card = k.id; commit();
     },
-    seqAdd() { const s = seqOf(cur()); s.steps.push(newStep((+s.steps[s.steps.length - 1].day || 0) + 5)); commit(); },
-    seqDel(d) { seqOf(cur()).steps.splice(+d.i, 1); ui.prev = -1; commit(); },
-    seqApprove(d) { const st = seqOf(cur()).steps[+d.i]; st.status = st.status === 'approved' ? 'draft' : 'approved'; commit(); },
+    seqAdd() { const s = stepsOf(cur()); s.push(newStep((+s[s.length - 1].day || 0) + 5)); commit(); },
+    seqDel(d) { stepsOf(cur()).splice(+d.i, 1); ui.prev = -1; commit(); },
+    seqTab(d) { ui.var = d.v; ui.prev = -1; render(); },
+    // A new variant starts as a copy of A, so only the part being tested has to be rewritten.
+    seqTabAdd() {
+      const s = seqOf(cur()), k = ['B', 'C'].find((x) => !s.alt[x]); if (!k) return;
+      s.alt[k] = { steps: s.steps.map((st) => Object.assign({}, st, { id: uid('s'), status: 'draft' })) };
+      s.modes[k] = k === 'B' ? (s.modes.A === 'gpt' ? 'claude' : 'gpt') : 'manual'; ui.var = k; ui.prev = -1; commit();
+    },
+    seqTabDel() { const s = seqOf(cur()), k = curVar(s); if (k === 'A') return; delete s.alt[k]; delete s.modes[k]; ui.var = 'A'; ui.prev = -1; commit(); },
+    sendOpen() { ui.edit = { kind: 'send' }; ui.menu = null; render(); },
+    sendTog(d) { S.send[d.k] = !S.send[d.k]; commit(); },
+    toneToggle(d) { const s = curParam().s; s.tones = s.tones || []; const i = s.tones.indexOf(d.v); if (i < 0) s.tones.push(d.v); else s.tones.splice(i, 1); commit(); },
+    mbFoot(d) {
+      const it = curParam(), m = it.s.mailboxes[+d.i]; m.footOn = !m.footOn;
+      if (m.footOn && !m.foot) m.foot = 'Not relevant? Reply "no" and I will not write again.\n' + it.name;
+      commit();
+    },
+    seqApprove(d) { const st = stepsOf(cur())[+d.i]; st.status = st.status === 'approved' ? 'draft' : 'approved'; commit(); },
     seqPreview(d) { ui.prev = ui.prev === +d.i ? -1 : +d.i; render(); },
     seqVar(d) {
-      const st = seqOf(cur()).steps[+d.i], el = document.querySelector(`[data-seq="${d.i}|body"]`), pos = el ? el.selectionStart : st.body.length;
+      const st = stepsOf(cur())[+d.i], el = document.querySelector(`[data-seq="${d.i}|body"]`), pos = el ? el.selectionStart : st.body.length;
       st.body = st.body.slice(0, pos) + '{{' + d.v + '}}' + st.body.slice(pos); st.status = 'draft'; commit();
     },
     taskDone(d) { const c = S.cards.find((x) => x.id === d.id); c.done = !c.done; commit(); },
@@ -707,7 +769,7 @@
       S.cards = S.cards.filter((c) => c.id !== ui.open); S.leads = S.leads.filter((l) => l.cid !== ui.open); ui.open = null; commit();
     },
     rmDoc(d) { S.docs = S.docs.filter((x) => x.id !== d.id); commit(); },
-    reset() { S = demoState(); S.leads = []; S.guideSeen = true; ui.aiLog = []; ui.open = null; ui.edit = null; ui.fcolor = ''; ui.legendEdit = false; commit(); },
+    reset() { S = demoState(); S.send = defaultSend(); S.leads = []; S.guideSeen = true; ui.aiLog = []; ui.open = null; ui.edit = null; ui.fcolor = ''; ui.legendEdit = false; commit(); },
   };
 
   function newParam(zone, name) {
@@ -768,7 +830,7 @@
     if (el.hasAttribute('data-search')) { ui.q = el.value; const pos = el.selectionStart; render(); const n = document.querySelector('[data-search]'); n.focus(); n.setSelectionRange(pos, pos); return; }
     if (el.hasAttribute('data-lq')) { ui.lq = el.value; const pos = el.selectionStart; render(); const n = document.querySelector('[data-lq]'); n.focus(); n.setSelectionRange(pos, pos); return; }
     if (el.dataset.seq && c) {
-      const [i, k] = el.dataset.seq.split('|'), st = seqOf(c).steps[+i]; st[k] = k === 'day' ? Math.max(0, +el.value || 0) : el.value;
+      const [i, k] = el.dataset.seq.split('|'), st = stepsOf(c)[+i]; st[k] = k === 'day' ? Math.max(0, +el.value || 0) : el.value;
       // Changing an approved letter sends it back to draft, so nothing unapproved can ever be sent.
       const box = el.closest('.step'), btn = box && box.querySelector('[data-act="seqApprove"]');
       if (k !== 'day' && st.status !== 'draft') { st.status = 'draft'; if (box) { box.className = 'step st-draft'; box.querySelector('.stt').textContent = t('seq_draft'); if (btn) btn.textContent = t('approve'); } }
@@ -779,6 +841,7 @@
     if (el.dataset.u) { S.user[el.dataset.u] = el.value; save(); return; }
     if (el.dataset.lgname) { legendOf(el.dataset.lgname).label = el.value; save(); return; }
     if (el.dataset.lgcolor) { legendOf(el.dataset.lgcolor).color = el.value; save(); return; }
+    if (p && el.dataset.mbfoot) { p.s.mailboxes[+el.dataset.mbfoot].foot = el.value; save(); return; }
     if (p && el.dataset.mbsig) { p.s.mailboxes[+el.dataset.mbsig].sig = el.value; save(); return; }
     if (p && el.dataset.s) { p.s[el.dataset.s] = el.value; save(); return; }
     if (p && el.hasAttribute('data-pname')) { p.name = el.value; save(); return; }
@@ -794,6 +857,15 @@
     if (el.hasAttribute('data-file')) { takeImage(el.files[0]); return; }
     if (el.hasAttribute('data-leadfile')) { const f = el.files[0]; if (f && c) f.text().then((txt) => importLeads(c, txt)); return; }
     if (el.hasAttribute('data-seqfrom') && c) { seqOf(c).from = el.value; commit(); return; }
+    if (el.hasAttribute('data-seqmode') && c) { const s = seqOf(c); s.modes[curVar(s)] = el.value; commit(); return; }
+    if (el.hasAttribute('data-seqlang') && c) { seqOf(c).lang = el.value; commit(); return; }
+    // The slider loads a ready set of limits; each number can then be changed, but never past the red zone.
+    if (el.hasAttribute('data-sendlevel')) { S.send.level = +el.value; Object.assign(S.send, RISK[S.send.level]); commit(); return; }
+    if (el.dataset.send) {
+      const k = el.dataset.send, lim = SEND_LIMITS[k], s = S.send; s[k] = Math.min(lim[1], Math.max(lim[0], Math.round(+el.value) || lim[0]));
+      if (s.start > s.cap) s.start = s.cap; if (s.gapMax <= s.gapMin) s.gapMax = s.gapMin + 1; if (s.to <= s.from) s.to = Math.min(24, s.from + 1);
+      commit(); return;
+    }
     if (el.hasAttribute('data-show')) { S.show = el.value; commit(); return; }
     if (el.dataset.urole) { const u = au.users.find((x) => x.id === el.dataset.urole); if (u) u.role = el.value; Cloud.setRole(el.dataset.urole, el.value); render(); return; }
     if (el.dataset.cacc) {
@@ -864,7 +936,7 @@
         else if (name === 'users') au.users = d;
         else if (name === 'guards') { au.guards = {}; d.forEach((g) => { au.guards[g.id] = g.list || []; }); }
         else if (name === 'taken') S.taken = d;
-        else if (name === 'workspace') { S.legend = (d && d.legend) || S.legend; S.docs = (d && d.docs) || []; }
+        else if (name === 'workspace') { S.legend = (d && d.legend) || S.legend; S.docs = (d && d.docs) || []; S.send = Object.assign(defaultSend(), d && d.send); }
         // Parameters created before access lists existed get them from the admin's program, once.
         if (name === 'params' && au.super) setTimeout(() => {
           let fixed = false;
@@ -875,7 +947,7 @@
         if (!typing()) render();
       },
       collect() {
-        const out = { params: {}, vectors: {}, cards: {}, gdocs: {}, leads: {}, taken: {}, workspace: { shared: { legend: S.legend, docs: S.docs } } };
+        const out = { params: {}, vectors: {}, cards: {}, gdocs: {}, leads: {}, taken: {}, workspace: { shared: { legend: S.legend, docs: S.docs, send: S.send || defaultSend() } } };
         ZONES.forEach((z) => S.zones[z].forEach((it) => { out.params[it.id] = Object.assign({}, it, { zone: z }); }));
         S.vectors.forEach((v) => { out.vectors[v.id] = v; }); S.cards.forEach((c) => { out.cards[c.id] = c; }); S.gdocs.forEach((g) => { out.gdocs[g.id] = g; }); (S.taken || []).forEach((x) => { out.taken[x.id] = x; }); S.leads.forEach((l) => { out.leads[l.id] = l; });
         return out;

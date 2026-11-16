@@ -34,6 +34,19 @@ const LEAD_COLS = {
   companyPhone: ['companyphone', 'corporatephonenumber'], country: ['country'], state: ['state'], city: ['city'],
   seniority: ['seniority'], employees: ['employees'], fit: ['fitevidence'], source: ['source'],
 };
+// Sending presets for one cold mailbox, from careful (green) to the edge of what is still safe (red).
+const RISK = [
+  { start: 3, step: 2, cap: 10, gapMin: 10, gapMax: 20 },
+  { start: 5, step: 3, cap: 15, gapMin: 8, gapMax: 15 },
+  { start: 5, step: 5, cap: 20, gapMin: 6, gapMax: 12 },
+  { start: 8, step: 5, cap: 30, gapMin: 4, gapMax: 9 },
+  { start: 10, step: 10, cap: 40, gapMin: 3, gapMax: 7 },
+];
+const RISK_COLORS = ['#12995B', '#7DB32B', '#E0A100', '#E4772E', '#D43C2F'];
+const SEND_LIMITS = { start: [1, 15], step: [0, 10], cap: [1, 40], gapMin: [2, 60], gapMax: [3, 120], from: [0, 23], to: [1, 24], perDomain: [1, 5], bounce: [1, 5] };
+function defaultSend() { return Object.assign({ level: 0, from: 9, to: 17, workdays: true, jitter: true, coldSecondary: true, noTrack: true, perDomain: 2, bounce: 3 }, RISK[0]); }
+const LANGS = ['en', 'es', 'de', 'fr', 'it', 'nl', 'sv', 'no', 'da', 'fi', 'pl', 'uk'];
+const TONES = ['direct', 'friendly', 'expert', 'formal', 'brief', 'curious'];
 const SEQ_VARS = ['firstName', 'lastName', 'company', 'jobTitle', 'city', 'myName', 'signature'];
 const SENIORITY = ['Owner / C-level', 'VP', 'Director', 'Manager'];
 // Default grey outline pictures for parameters without an image.
