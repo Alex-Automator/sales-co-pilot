@@ -297,13 +297,22 @@
 
   // ---------- letters: one letter or a chain, written, checked and approved before anything is sent ----------
   const newStep = (day) => ({ id: uid('s'), day, subject: '', body: '', status: 'draft' });
-  // A chain starts with letter A alone. B, C and further letters are short reminders that go out only while
-  // the client stays silent; each letter has its own pair of AIs: one writes, the other checks.
-  const MODE0 = ['claude', 'gpt', 'claude'];
-  const seqOf = (c) => { if (!c.seq) c.seq = { from: '', steps: [newStep(0)] }; if (!c.seq.lang) c.seq.lang = 'en'; return c.seq; };
-  const stepsOf = (c) => seqOf(c).steps;
-  const modeOf = (st, i) => st.mode || MODE0[i] || 'claude';
-  const ltr = (i) => String.fromCharCode(65 + i);
+  // Variants A, B, C are different letters for the same campaign, sent in parallel: split evenly to compare them,
+  // or each to its own job titles. Every variant has its own chain: A1, then reminders A2, A3 while the client is silent.
+  const seqOf = (c) => { if (!c.seq) c.seq = { from: '', steps: [newStep(0)] }; const s = c.seq; if (!s.lang) s.lang = 'en'; if (!s.alt) s.alt = {}; if (!s.split) s.split = 'even'; return s; };
+  const varsOf = (s) => ['A'].concat(['B', 'C'].filter((k) => s.alt[k]));
+  const curVar = (s) => (varsOf(s).includes(ui.var) ? ui.var : 'A');
+  const stepsOf = (c) => { const s = seqOf(c), k = curVar(s); return k === 'A' ? s.steps : s.alt[k].steps; };
+  const whoOf = (s, k) => (k === 'A' ? s.whoA : s.alt[k].who) || '';
+  const words = (x) => String(x || '').toLowerCase().split(/[,;\n]/).map((w) => w.trim()).filter(Boolean);
+  // Which variant a recipient gets: by job title when the campaign is split that way, otherwise in turn.
+  function variantOf(s, lead, n) {
+    const vs = varsOf(s); if (vs.length === 1) return 'A';
+    if (s.split !== 'role') return vs[n % vs.length];
+    const jt = String(lead.f.jobTitle || '').toLowerCase();
+    return vs.find((k) => words(whoOf(s, k)).some((w) => jt.includes(w))) || 'A';
+  }
+  const modeOf = (st, k) => st.mode || (k === 'B' ? 'gpt' : 'claude');
   const stepReady = (st, i) => !!(st.body.trim() && (i > 0 || st.subject.trim()));
   const langName = (code) => { try { const n = new Intl.DisplayNames([S.lang === 'uk' ? 'uk' : 'en'], { type: 'language' }).of(code); return n[0].toUpperCase() + n.slice(1); } catch (e) { return code; } };
   function sampleFor(c) {
@@ -316,15 +325,21 @@
   function vSequence(c) {
     const seq = seqOf(c), v = S.vectors.find((x) => x.id === c.vid), co = v ? item('company', v.company) : null, mbs = myMailboxes(co);
     const from = mbs.length ? `<select class="in" data-seqfrom>${mbs.map((m) => `<option ${((seq.from || primaryMailbox(co)) === m.email) ? 'selected' : ''}>${esc(m.email)}</option>`).join('')}</select>` : `<span class="sub">${t('noMailbox')}</span>`;
-    const list = stepsOf(c);
+    const list = stepsOf(c), vs = varsOf(seq), k = curVar(seq), nextV = ['B', 'C'].find((x) => !seq.alt[x]);
+    const cnt = {}; S.leads.filter((l) => l.cid === c.id && !blockedWhy(l)).forEach((l, n) => { const x = variantOf(seq, l, n); cnt[x] = (cnt[x] || 0) + 1; });
+    const vtabs = c.type !== 'campaign' ? '' : `<div class="vtabs">${vs.map((x) => `<button class="chip ${x === k ? 'on' : ''}" data-act="seqTab" data-v="${x}">${t('variant')} ${x} · ${cnt[x] || 0}</button>`).join('')}
+        ${nextV ? `<button class="chip dash" data-act="seqTabAdd" title="${t('variantHint')}">+ ${t('variant')} ${nextV}</button>` : ''}${k !== 'A' ? `<button class="link small" data-act="seqTabDel">${t('removeVariant')} ${k}</button>` : ''}</div>
+      ${vs.length < 2 ? '' : `<div class="row2 vset"><label class="fl"><span>${t('splitHow')}</span><select class="in" data-seqsplit><option value="even" ${seq.split !== 'role' ? 'selected' : ''}>${t('split_even')}</option><option value="role" ${seq.split === 'role' ? 'selected' : ''}>${t('split_role')}</option></select></label>
+        ${seq.split === 'role' ? `<label class="fl"><span>${t('whoFor')} ${k}</span><input class="in" data-seqwho placeholder="CEO, Owner, Founder" value="${esc(whoOf(seq, k))}"></label>` : '<span></span>'}</div>
+        <p class="sub small">${t(seq.split === 'role' ? 'splitRoleNote' : 'splitEvenNote')}</p>`}`;
     const head2 = `<div class="row2 vset"><label class="fl"><span>${t('sendLang')}</span><select class="in" data-seqlang>${LANGS.map((l) => `<option value="${l}" ${seq.lang === l ? 'selected' : ''}>${esc(langName(l))}</option>`).join('')}</select></label><span></span></div>
       ${seq.lang !== 'en' ? `<p class="sub small">${t('langNote').replace('{l}', langName(seq.lang))}</p>` : ''}`;
     const done = list.filter((x) => x.status === 'approved').length, smp = Object.assign({}, sampleFor(c), { signature: sigOf(co, seq.from || primaryMailbox(co)) });
-    const steps = list.map((st, i) => { const mode = modeOf(st, i); return `<div class="step st-${st.status}" data-step="${i}"><div class="sth"><b>${t('letter')} ${ltr(i)}</b>${i ? `<span class="ty">${t('ifSilent')}</span>` : ''}
+    const steps = list.map((st, i) => { const mode = modeOf(st, k); return `<div class="step st-${st.status}" data-step="${i}"><div class="sth"><b>${t('letter')} ${k}${i + 1}</b>${i ? `<span class="ty">${t('ifSilent')}</span>` : ''}
         <label class="dayl" title="${t('dayHint')}">${t('dayN')} <input class="in" type="number" min="0" data-seq="${i}|day" value="${+st.day || 0}" ${i === 0 ? 'disabled' : ''}></label>
         <span class="stt">${t('seq_' + st.status)}</span>${i > 0 && i === list.length - 1 ? `<button class="link" data-act="seqDel" data-i="${i}">×</button>` : ''}</div>
       <select class="in modesel" data-stepmode="${i}" title="${t('whoWrites')}">${['claude', 'gpt', 'manual'].map((m) => `<option value="${m}" ${mode === m ? 'selected' : ''}>${t('mode_' + m)}</option>`).join('')}</select>
-      <input class="in" data-seq="${i}|subject" placeholder="${i ? t('subjectRe') : t('subject')}" value="${esc(st.subject)}">
+      <input class="in" data-seq="${i}|subject" placeholder="${i ? t('subjectRe').replace('{k}', k) : t('subject')}" value="${esc(st.subject)}">
       <textarea class="in" rows="${i ? 4 : 6}" data-seq="${i}|body" placeholder="${i ? (mode === 'manual' ? t('followPhManual') : t('followPh')) : t('body')}">${esc(st.body)}</textarea>
       <div class="vars">${SEQ_VARS.map((x) => `<button class="chip" data-act="seqVar" data-i="${i}" data-v="${x}">{{${x}}}</button>`).join('')}</div>
       <div class="acts tight">${mode === 'manual' ? '' : `<button class="btn ghost sm" disabled title="${t('stage')} 3">${i ? t('aiFollow') : t('aiDraft')}</button>`}<button class="btn ghost sm" disabled title="${t('stage')} 3">${t('aiReview')}</button>
@@ -332,7 +347,7 @@
         <button class="btn sm" data-act="seqApprove" data-i="${i}" ${st.status === 'approved' || stepReady(st, i) ? '' : 'disabled'}>${st.status === 'approved' ? t('unapprove') : t('approve')}</button></div>
       ${ui.prev === i ? `<div class="prevbox"><small>${t('previewFor')} ${esc([smp.firstName, smp.lastName].filter(Boolean).join(' '))}</small><b>${esc(fillVars(st.subject || 'Re: ' + list[0].subject, smp))}</b><pre>${esc(fillVars(withSig(st.body, smp.signature), smp))}</pre></div>` : ''}</div>`; }).join('');
     return `<div class="seqhead"><label class="fromf"><span>${t('fromMailbox')}</span>${from}</label><span class="ty">${done} / ${list.length} ${t('approvedOf')}</span></div>
-      ${head2}${steps}${list.length < 5 ? `<button class="add" data-act="seqAdd">+ ${t('letter')} ${ltr(list.length)} · ${t('addFollow')}</button>` : ''}<p class="sub small">${t('chainNote')} ${t('seqNote')}</p>`;
+      ${head2}${vtabs}${steps}${list.length < 5 ? `<button class="add" data-act="seqAdd">+ ${t('letter')} ${k}${list.length + 1} · ${t('addFollow')}</button>` : ''}<p class="sub small">${t('chainNote')} ${t('seqNote')}</p>`;
   }
 
   function vCardModal() {
@@ -662,6 +677,9 @@
       S.cards.push(k); l.card = k.id; commit();
     },
     seqAdd() { const s = stepsOf(cur()); if (s.length < 5) s.push(newStep((+s[s.length - 1].day || 0) + (s.length === 1 ? 4 : 5))); commit(); },
+    seqTab(d) { ui.var = d.v; ui.prev = -1; render(); },
+    seqTabAdd() { const s = seqOf(cur()), k = ['B', 'C'].find((x) => !s.alt[x]); if (!k) return; s.alt[k] = { who: '', steps: [newStep(0)] }; ui.var = k; ui.prev = -1; commit(); },
+    seqTabDel() { const s = seqOf(cur()), k = curVar(s); if (k === 'A') return; delete s.alt[k]; ui.var = 'A'; ui.prev = -1; commit(); },
     seqDel(d) { stepsOf(cur()).splice(+d.i, 1); ui.prev = -1; commit(); },
     sendOpen() { ui.edit = { kind: 'send' }; ui.menu = null; render(); },
     sendTog(d) { S.send[d.k] = !S.send[d.k]; commit(); },
@@ -819,6 +837,7 @@
     const el = e.target, c = cur(), p = curParam();
     if (el.hasAttribute('data-search')) { ui.q = el.value; const pos = el.selectionStart; render(); const n = document.querySelector('[data-search]'); n.focus(); n.setSelectionRange(pos, pos); return; }
     if (el.hasAttribute('data-lq')) { ui.lq = el.value; const pos = el.selectionStart; render(); const n = document.querySelector('[data-lq]'); n.focus(); n.setSelectionRange(pos, pos); return; }
+    if (el.hasAttribute('data-seqwho') && c) { const q = seqOf(c), k = curVar(q); if (k === 'A') q.whoA = el.value; else q.alt[k].who = el.value; save(); return; }
     if (el.dataset.seq && c) {
       const [i, k] = el.dataset.seq.split('|'), st = stepsOf(c)[+i]; st[k] = k === 'day' ? Math.max(0, +el.value || 0) : el.value;
       // Changing an approved letter sends it back to draft, so nothing unapproved can ever be sent.
@@ -847,6 +866,8 @@
     if (el.hasAttribute('data-file')) { takeImage(el.files[0]); return; }
     if (el.hasAttribute('data-leadfile')) { const f = el.files[0]; if (f && c) f.text().then((txt) => importLeads(c, txt)); return; }
     if (el.hasAttribute('data-seqfrom') && c) { seqOf(c).from = el.value; commit(); return; }
+    if (el.hasAttribute('data-seqsplit') && c) { seqOf(c).split = el.value; commit(); return; }
+    if (el.hasAttribute('data-seqwho') && c) { render(); return; }
     if (el.dataset.stepmode && c) { stepsOf(c)[+el.dataset.stepmode].mode = el.value; commit(); return; }
     if (el.hasAttribute('data-seqlang') && c) { seqOf(c).lang = el.value; commit(); return; }
     // The slider loads a ready set of limits; each number can then be changed, but never past the red zone.

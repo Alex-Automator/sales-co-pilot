@@ -407,3 +407,4 @@ p.later{padding:22px 8px;color:var(--mut)}
 .sp2{margin-top:20px}.srow{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:7px 0;border-bottom:1px solid var(--line)}
 .srow .lt{font-size:13.5px}.sv{white-space:nowrap;color:var(--mut)}.in.nin{width:68px;display:inline-block;text-align:center;padding:6px 4px}
 .modesel{font-size:12.5px;padding:6px 8px;color:var(--mut)}.sth .ty{margin-right:auto}
+.vset+.vtabs,.vtabs{margin-top:10px}
