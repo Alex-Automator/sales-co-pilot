@@ -20,27 +20,30 @@ const Cloud = (function () {
 
   // First sign-in creates the user. Whoever signs in first becomes the admin; everyone else waits for approval.
   async function enter(u) {
-    const ref = db.collection('users').doc(u.uid);
+    const ref = db.collection('users').doc(u.uid), meta = db.collection('meta').doc('app');
+    let m = await meta.get();
     const snap = await ref.get();
     if (!snap.exists) {
       let r = 'pending';
-      const meta = db.collection('meta').doc('app');
-      if (!(await meta.get()).exists) {
-        try { await meta.set({ adminUid: u.uid, created: now() }); r = 'admin'; } catch (e) { r = 'pending'; }
+      if (!m.exists) {
+        try { await meta.set({ adminUid: u.uid, created: now() }); r = 'admin'; m = await meta.get(); } catch (e) { r = 'pending'; }
       }
       await ref.set({ name: u.displayName || '', email: u.email || '', photo: u.photoURL || '', role: r, created: now() });
     }
+    // The first person who signed in is the super admin for good; everyone learns who that is, nobody can change it.
+    const ownerUid = m.exists ? m.data().adminUid : '', sup = ownerUid === u.uid;
     subs.push(ref.onSnapshot((s) => {
       const d = s.data() || {};
-      if (d.role !== 'admin' && d.role !== 'user') { subs.slice(1).forEach((f) => f()); subs = subs.slice(0, 1); role = null; hooks.auth({ status: 'pending', uid: u.uid, role: 'pending', user: d }); return; }
+      if (d.role !== 'admin' && d.role !== 'user') { subs.slice(1).forEach((f) => f()); subs = subs.slice(0, 1); role = null; hooks.auth({ status: 'pending', uid: u.uid, role: 'pending', super: false, ownerUid, user: d }); return; }
       const first = role === null, changed = role !== d.role; role = d.role;
-      if (changed) { subs.slice(1).forEach((f) => f()); subs = subs.slice(0, 1); shadow = {}; loaded = {}; held = {}; parts = {}; listen(u.uid, d.role); }
-      if (first || changed) hooks.auth({ status: 'in', uid: u.uid, role: d.role, user: d });
+      if (changed) { subs.slice(1).forEach((f) => f()); subs = subs.slice(0, 1); shadow = {}; loaded = {}; held = {}; parts = {}; listen(u.uid, d.role, sup); }
+      if (first || changed) hooks.auth({ status: 'in', uid: u.uid, role: d.role, super: sup, ownerUid, user: d });
     }, fail));
   }
 
-  function listen(uid, r) {
-    const all = (c) => db.collection(c), has = (c, v) => all(c).where('acl', 'array-contains', v), mine = (c) => (r === 'admin' ? all(c) : has(c, uid));
+  // The super admin reads everything; admins and operators read what their id is listed on.
+  function listen(uid, r, sup) {
+    const all = (c) => db.collection(c), has = (c, v) => all(c).where('acl', 'array-contains', v), mine = (c) => (sup ? all(c) : has(c, uid));
     const docs = (s) => s.docs.map((d) => Object.assign({ id: d.id }, d.data()));
     // A list can be fed by several queries; it is passed on once every one of them has answered.
     const on = (name, queries) => {
@@ -51,9 +54,9 @@ const Cloud = (function () {
       }, (e) => { parts[name][i] = parts[name][i] || []; if (!loaded[name] && parts[name].every(Boolean)) take(name, [].concat(...parts[name])); fail(e); })));
     };
     // Companies and directions come only if this person was given access; audiences and topics ('*') are shared.
-    on('params', r === 'admin' ? [all('params')] : [has('params', '*'), has('params', uid)]);
+    on('params', sup ? [all('params')] : [has('params', '*'), has('params', uid)]);
     on('vectors', [mine('vectors')]); on('cards', [mine('cards')]); on('gdocs', [mine('gdocs')]); on('leads', [mine('leads')]); on('users', [all('users')]);
-    on('taken', [r === 'admin' ? all('taken') : all('taken').where('owner', '==', uid)]);
+    on('taken', [sup ? all('taken') : all('taken').where('owner', '==', uid)]);
     if (r === 'admin') on('guards', [all('guards')]);
     else subs.push(db.collection('guards').doc(uid).onSnapshot((s) => take('guards', s.exists ? [Object.assign({ id: uid }, s.data())] : []), () => take('guards', [])));
     subs.push(db.collection('workspace').doc('shared').onSnapshot((s) => take('workspace', s.exists ? s.data() : null), fail));

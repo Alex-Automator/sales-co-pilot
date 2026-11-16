@@ -5,7 +5,7 @@
   // With Firebase loaded the program is real: sign-in and shared data. Without it (the preview) it runs on demo data.
   const CLOUD = !!(window.firebase && window.FIREBASE_CONFIG);
   const PREFS = ['lang', 'view', 'active', 'draft', 'widgets', 'guideSeen', 'show'];
-  const au = { status: CLOUD ? 'loading' : 'in', uid: 'me', role: 'admin', users: [], guards: {}, err: '' };
+  const au = { status: CLOUD ? 'loading' : 'in', uid: 'me', role: 'admin', super: !CLOUD, ownerUid: '', users: [], guards: {}, err: '' };
   let S = load();
   let ui = { open: null, edit: null, q: '', ftype: 'all', fdue: false, zone: 'company', dbtab: 'library', delArm: false, adding: null, fresh: null, popped: null, menu: null, legendEdit: false, fcolor: '', ctab: 'details', lq: '', imp: null, prev: -1, checkLeft: 0, cal: 0, ai: !S.guideSeen, aiView: 'home', aiLog: [] };
 
@@ -47,9 +47,17 @@
   const tally = (cs) => ({ reply: cs.filter((c) => c.awaiting && !closed(c)).length, due: cs.filter(isDue).length });
   // A mailbox belongs to the operator who added it; operators see and use only their own, the admin sees all.
   const mineMb = (m) => (m.owner || '') === au.uid || (!CLOUD);
+  const sigOf = (co, email) => ((((co && co.s.mailboxes) || []).find((m) => m.email === email) || {}).sig || '');
   const myMailboxes = (co) => ((co && co.s.mailboxes) || []).filter(mineMb);
   const primaryMailbox = (co) => { const m = myMailboxes(co); return (m.find((x) => x.primary) || m[0] || {}).email || ''; };
   const admin = () => au.role === 'admin';
+  // Three levels: the super admin (first person who signed in) sees and manages everything; an admin manages
+  // only the companies assigned to them; an operator works inside the access they were given.
+  const sup = () => !CLOUD || au.super;
+  const managersOf = (co) => (co && co.managers) || [];
+  const manages = (co) => sup() || (admin() && managersOf(co).includes(au.uid));
+  const uniq = (a) => a.filter((x, i) => x && a.indexOf(x) === i);
+  const roleName = (u) => (u.id === au.ownerUid ? t('acc_super') : t('acc_' + u.role));
   const takenId = (company, email) => (company + '__' + String(email).trim().toLowerCase()).replace(/[\/\s]/g, '_');
   // Why a contact is closed for this operator: on the admin's forbidden list, or already in another manager's work.
   function blockedWhy(c) {
@@ -60,13 +68,14 @@
   }
   // Keeps the access lists that the server checks in step with the settings people actually edit.
   function normalize() {
-    S.zones.company.forEach((co) => { if (co.access) co.acl = Object.keys(co.access); });
+    S.zones.company.forEach((co) => { if (co.access || co.managers) co.acl = uniq(Object.keys(co.access || {}).concat(managersOf(co))); });
+    S.vectors.forEach((v) => { const co = item('company', v.company); if (co && (v.owner === au.uid || manages(co))) v.acl = uniq([v.owner].concat(v.members || [], managersOf(co))); });
     S.zones.direction.forEach((d) => { const co = item('company', d.company); if (co && co.acl) d.acl = co.acl.slice(); });
     ['audience', 'topic'].forEach((z) => S.zones[z].forEach((it) => { if (!it.acl) it.acl = ['*']; }));
     const aclFor = (c, type) => {
-      const v = S.vectors.find((x) => x.id === c.vid); if (!v) return c.acl || [];
-      const a = (v.acl || [v.owner]).slice(), co = item('company', v.company);
-      if (type !== 'task' && co && co.access) Object.keys(co.access).forEach((u) => { if (co.access[u] === 'shared' && !a.includes(u)) a.push(u); });
+      const v = S.vectors.find((x) => x.id === c.vid), co = v && item('company', v.company); if (!v || !co) return c.acl || [];
+      const a = (v.acl || [v.owner]).slice();
+      if (type !== 'task' && co.access) Object.keys(co.access).forEach((u) => { if (co.access[u] === 'shared' && !a.includes(u)) a.push(u); });
       return a;
     };
     S.cards.forEach((c) => { c.acl = aclFor(c, c.type); if (!c.owner) { const v = S.vectors.find((x) => x.id === c.vid); if (v) c.owner = v.owner; } });
@@ -110,7 +119,7 @@
         ${CLOUD ? mi('usersOpen', t('setUsers'), '', au.role !== 'admin') : mi('', t('setUsers'), later(2), 1)}${mi('', t('setMail'), later(3), 1)}${mi('', t('setAI'), later(4), 1)}${CLOUD ? '' : `<hr>${mi('reset', t('reset'))}`}<div class="ver">${t('version')} ${VERSION}</div></div></div>
       <nav>${tabs}</nav><div class="crumb" title="${crumb}">${crumb}</div>
       <div class="right"><button class="aibtn ${ui.ai ? 'on' : ''}" data-act="aiToggle">${svg(UI_ICONS.spark)}<span>${t('aiHelper')}</span></button><button class="userbtn" data-act="userMenu"><span class="un"><b>${esc(u.name)}</b><small>${esc(u.email)}</small></span><span class="ava">${ava}</span></button>
-        ${ui.menu === 'user' ? `<div class="menu show"><div class="mh">${esc(u.email)}${CLOUD ? ' · ' + t('acc_' + au.role) : ''}</div>${CLOUD ? '' : mi('editProfile', t('myProfile'))}${mi('lang', t('setLanguage'), langX)}<hr>${CLOUD ? mi('signOut', t('signOut')) : mi('', t('signOut'), later(2), 1)}</div>` : ''}</div></header>`;
+        ${ui.menu === 'user' ? `<div class="menu show"><div class="mh">${esc(u.email)}${CLOUD ? ' · ' + (au.super ? t('acc_super') : t('acc_' + au.role)) : ''}</div>${CLOUD ? '' : mi('editProfile', t('myProfile'))}${mi('lang', t('setLanguage'), langX)}<hr>${CLOUD ? mi('signOut', t('signOut')) : mi('', t('signOut'), later(2), 1)}</div>` : ''}</div></header>`;
   }
 
   function chevron(v, opts) {
@@ -146,7 +155,7 @@
     }).join('');
 
     const ready = draftComplete(), dup = ready && sameVector(S.draft);
-    const seed = CLOUD && au.role === 'admin' && ZONES.every((z) => !S.zones[z].length) ? `<div class="hello seed"><b>${t('seedTitle')}</b><button class="btn sm" data-act="seed">${t('seedBtn')}</button></div>` : '';
+    const seed = CLOUD && au.super && ZONES.every((z) => !S.zones[z].length) ? `<div class="hello seed"><b>${t('seedTitle')}</b><button class="btn sm" data-act="seed">${t('seedBtn')}</button></div>` : '';
     return `<main class="vscreen">
       <section class="vtop"><div class="vhead"><div><h1>${t('vectorsTitle')}</h1><p class="sub">${t('vectorsSub')}</p></div>
         ${CLOUD ? `<label class="showf"><span>${t('showLabel')}</span><select class="in" data-show><option value="mine" ${showMode() === 'mine' ? 'selected' : ''}>${t('showMine')}</option><option value="all" ${showMode() === 'all' ? 'selected' : ''}>${t('showAll')}</option>${
@@ -291,11 +300,13 @@
     if (c.type === 'contact') { const p = c.title.split(' '); return { firstName: p[0], lastName: p.slice(1).join(' '), company: c.f.company, jobTitle: c.f.jobTitle, city: '' }; }
     const l = S.leads.find((x) => x.cid === c.id && !blockedWhy(x)); return l ? l.f : { firstName: 'Anna', lastName: 'Berg', company: 'Example AS', jobTitle: 'CEO', city: 'Oslo' };
   }
-  const fillVars = (text, r) => String(text || '').replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => (k === 'myName' ? S.user.name : r[k]) || m);
+  const fillVars = (text, r) => String(text || '').replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => (k === 'myName' ? S.user.name : k === 'signature' ? r.signature || '' : r[k]) || (k === 'signature' ? '' : m));
+  // The signature of the chosen mailbox goes at the end of every letter, unless the text places {{signature}} itself.
+  const withSig = (body, sig) => (!sig || /\{\{\s*signature\s*\}\}/.test(body) ? body : body.replace(/\s+$/, '') + '\n\n{{signature}}');
   function vSequence(c) {
     const seq = seqOf(c), v = S.vectors.find((x) => x.id === c.vid), co = v ? item('company', v.company) : null, mbs = myMailboxes(co);
     const from = mbs.length ? `<select class="in" data-seqfrom>${mbs.map((m) => `<option ${((seq.from || primaryMailbox(co)) === m.email) ? 'selected' : ''}>${esc(m.email)}</option>`).join('')}</select>` : `<span class="sub">${t('noMailbox')}</span>`;
-    const done = seq.steps.filter((x) => x.status === 'approved').length, smp = sampleFor(c);
+    const done = seq.steps.filter((x) => x.status === 'approved').length, smp = Object.assign({}, sampleFor(c), { signature: sigOf(co, seq.from || primaryMailbox(co)) });
     const steps = seq.steps.map((st, i) => `<div class="step st-${st.status}" data-step="${i}"><div class="sth"><b>${t('letter')} ${i + 1}</b>
         <label class="dayl" title="${t('dayHint')}">${t('dayN')} <input class="in" type="number" min="0" data-seq="${i}|day" value="${+st.day || 0}" ${i === 0 ? 'disabled' : ''}></label>
         <span class="stt">${t('seq_' + st.status)}</span>${seq.steps.length > 1 ? `<button class="link" data-act="seqDel" data-i="${i}">×</button>` : ''}</div>
@@ -305,7 +316,7 @@
       <div class="acts tight"><button class="btn ghost sm" disabled title="${t('stage')} 3">${t('aiDraft')}</button><button class="btn ghost sm" disabled title="${t('stage')} 3">${t('aiReview')}</button>
         <button class="btn ghost sm" data-act="seqPreview" data-i="${i}">${t('preview')}</button>
         <button class="btn sm" data-act="seqApprove" data-i="${i}" ${st.status === 'approved' || (st.subject.trim() && st.body.trim()) ? '' : 'disabled'}>${st.status === 'approved' ? t('unapprove') : t('approve')}</button></div>
-      ${ui.prev === i ? `<div class="prevbox"><small>${t('previewFor')} ${esc([smp.firstName, smp.lastName].filter(Boolean).join(' '))}</small><b>${esc(fillVars(st.subject, smp))}</b><pre>${esc(fillVars(st.body, smp))}</pre></div>` : ''}</div>`).join('');
+      ${ui.prev === i ? `<div class="prevbox"><small>${t('previewFor')} ${esc([smp.firstName, smp.lastName].filter(Boolean).join(' '))}</small><b>${esc(fillVars(st.subject, smp))}</b><pre>${esc(fillVars(withSig(st.body, smp.signature), smp))}</pre></div>` : ''}</div>`).join('');
     return `<div class="seqhead"><label class="fromf"><span>${t('fromMailbox')}</span>${from}</label><span class="ty">${done} / ${seq.steps.length} ${t('approvedOf')}</span></div>
       ${steps}<button class="add" data-act="seqAdd">${t('addLetter')}</button><p class="sub small">${t('seqNote')}</p>`;
   }
@@ -358,9 +369,11 @@
     vals.map((v) => `<option value="${v}" ${it.s[k] === v ? 'selected' : ''}>${t(pre + v)}</option>`).join('')}</select></label>`;
   function paramSettings(zone, it) {
     if (zone === 'company') {
-      const boxes = (it.s.mailboxes || []).map((m, i) => (!admin() && !mineMb(m) ? '' : `<div class="lrow"><button class="radio ${m.primary ? 'on' : ''}" data-act="mbPrimary" data-i="${i}" title="${t('primary')}"></button>
-        <span class="lt">${esc(m.email)}${CLOUD && admin() && m.owner !== au.uid ? ` <small class="ownr">${esc(userName(m.owner))}</small>` : ''}</span>${m.primary ? `<span class="ty">${t('primary')}</span>` : ''}<button class="link" data-act="mbRemove" data-i="${i}">×</button></div>`)).join('');
-      return sIn(it, 'website', t('website')) + `<div class="fl"><span>${t('mailboxes')}</span>${boxes}<input class="in" data-listadd="mailboxes" placeholder="${t('addMailbox')}"></div>` + sIn(it, 'signature', t('signatureText'), 1);
+      const boxes = (it.s.mailboxes || []).map((m, i) => (!manages(it) && !mineMb(m) ? '' : `<div class="mbx"><div class="lrow"><button class="radio ${m.primary ? 'on' : ''}" data-act="mbPrimary" data-i="${i}" title="${t('primary')}"></button>
+        <span class="lt">${esc(m.email)}${CLOUD && m.owner !== au.uid ? ` <small class="ownr">${esc(userName(m.owner))}</small>` : ''}</span>${m.primary ? `<span class="ty">${t('primary')}</span>` : ''}<button class="link" data-act="mbRemove" data-i="${i}">×</button></div>
+        <textarea class="in" rows="3" data-mbsig="${i}" placeholder="${t('mbSignature')}">${esc(m.sig || '')}</textarea>
+        ${m.sig ? '' : `<button class="link small" data-act="mbSigPlain" data-i="${i}">${t('sigPlain')}</button>`}</div>`)).join('');
+      return sIn(it, 'website', t('website')) + `<div class="fl"><span>${t('mailboxes')}</span>${boxes}<input class="in" data-listadd="mailboxes" placeholder="${t('addMailbox')}"><p class="sub small">${t('sigHint')}</p></div>`;
     }
     if (zone === 'direction') {
       const cr = (it.s.criteria || []).map((c, i) => `<div class="lrow"><span class="num">${i + 1}</span><span class="lt">${esc(c)}</span><button class="link" data-act="crRemove" data-i="${i}">×</button></div>`).join('');
@@ -374,17 +387,25 @@
     }
     return sIn(it, 'hook', t('topicHook'), 1) + sIn(it, 'keywords', t('topicKeywords')) + sIn(it, 'proof', t('topicProof'));
   }
-  const accSel = (co, u) => `<select class="in" data-cacc="${u.id}|${co.id}">${[['', 'accNone'], ['shared', 'accShared'], ['own', 'accOwn']].map((o) => `<option value="${o[0]}" ${((co.access || {})[u.id] || '') === o[0] ? 'selected' : ''}>${t(o[1])}</option>`).join('')}</select>`;
+  const accVal = (co, u) => (managersOf(co).includes(u.id) ? 'manage' : (co.access || {})[u.id] || '');
+  const accSel = (co, u) => `<select class="in" data-cacc="${u.id}|${co.id}">${[['', 'accNone'], ['shared', 'accShared'], ['own', 'accOwn']].concat(sup() && u.role === 'admin' ? [['manage', 'accManage']] : [])
+    .map((o) => `<option value="${o[0]}" ${accVal(co, u) === o[0] ? 'selected' : ''}>${t(o[1])}</option>`).join('')}</select>`;
   function vEditModal() {
     const e = ui.edit; if (!e) return '';
     let left, right;
     if (e.kind === 'users') {
-      const rows = au.users.slice().sort((a, b) => (a.created || '').localeCompare(b.created || '')).map((u) => `<div class="urow"><span class="ava">${u.photo ? `<img src="${esc(u.photo)}" alt="" referrerpolicy="no-referrer">` : esc(initials(u.name || u.email))}</span>
-        <span class="lt"><b>${esc(u.name || '—')}</b><br><small>${esc(u.email)}</small></span>
-        <select class="in" data-urole="${u.id}" ${u.id === au.uid ? 'disabled' : ''}>${['pending', 'user', 'admin'].map((r) => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${t('acc_' + r)}</option>`).join('')}</select></div>
-        ${u.role !== 'user' ? '' : `<div class="uacc"><div class="bh">${t('companiesAccess')}</div>${S.zones.company.map((co) => `<div class="lrow"><span class="lt">${esc(co.name)}</span>${accSel(co, u)}</div>`).join('')}
-          <label class="fl"><span>${t('forbidden')}</span><textarea class="in" rows="3" data-guard="${u.id}" placeholder="name@company.com">${esc((au.guards[u.id] || []).join('\n'))}</textarea></label><p class="sub small">${t('forbiddenHint')}</p></div>`}`).join('');
-      return `<div class="overlay" data-act="closeBg"><div class="modal one" role="dialog"><button class="mclose" data-act="closeAny" aria-label="Close">×</button><div class="mleft"><div class="bh">${t('usersTitle')}</div><p class="sub">${t('usersNote')}</p><p class="sub small">${t('modeNote')}</p>${rows}
+      const mine = S.zones.company.filter(manages);
+      const rows = au.users.slice().sort((a, b) => (a.created || '').localeCompare(b.created || '')).map((u) => {
+        const isOwner = u.id === au.ownerUid, canRole = !isOwner && u.id !== au.uid && (sup() || u.role !== 'admin');
+        const roles = sup() ? ['pending', 'user', 'admin'] : ['pending', 'user'];
+        const sel = canRole ? `<select class="in" data-urole="${u.id}">${roles.map((r) => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${t('acc_' + r)}</option>`).join('')}</select>` : `<span class="rolefix">${roleName(u)}</span>`;
+        const showAcc = !isOwner && u.id !== au.uid && (u.role === 'user' || (u.role === 'admin' && sup()));
+        return `<div class="urow"><span class="ava">${u.photo ? `<img src="${esc(u.photo)}" alt="" referrerpolicy="no-referrer">` : esc(initials(u.name || u.email))}</span>
+        <span class="lt"><b>${esc(u.name || '—')}</b><br><small>${esc(u.email)}</small></span>${sel}</div>
+        ${!showAcc ? '' : `<div class="uacc"><div class="bh">${t('companiesAccess')}</div>${mine.map((co) => `<div class="lrow"><span class="lt">${esc(co.name)}</span>${accSel(co, u)}</div>`).join('')}
+          <label class="fl"><span>${t('forbidden')}</span><textarea class="in" rows="3" data-guard="${u.id}" placeholder="name@company.com">${esc((au.guards[u.id] || []).join('\n'))}</textarea></label><p class="sub small">${t('forbiddenHint')}</p></div>`}`;
+      }).join('');
+      return `<div class="overlay" data-act="closeBg"><div class="modal one" role="dialog"><button class="mclose" data-act="closeAny" aria-label="Close">×</button><div class="mleft"><div class="bh">${t('usersTitle')}</div><p class="sub">${t('usersNote')}</p><p class="sub small">${t('rolesNote')}</p><p class="sub small">${t('modeNote')}</p>${rows}
         <div class="acts"><button class="btn sm" data-act="closeEdit">${t('close')}</button></div></div></div></div>`;
     }
     if (e.kind === 'profile') {
@@ -403,8 +424,8 @@
           <div><label class="btn ghost sm filebtn">${t('uploadImage')}<input type="file" accept="image/*" data-file hidden></label>
           ${it.img ? ` <button class="btn ghost sm" data-act="rmImg">${t('removeImage')}</button>` : ''}<p class="sub small">${t('imageHint')}</p></div></div>
         <label class="fl"><span>${t('name')}</span><input class="in big" data-pname value="${esc(it.name)}"></label>${paramSettings(e.zone, it)}`;
-      const accBox = !CLOUD ? `<p class="sub">${t('accessNote')}</p>` : e.zone !== 'company' ? '' : !admin() ? `<p class="sub">${t('accessAdminOnly')}</p>`
-        : au.users.filter((u) => u.role === 'user').map((u) => `<div class="lrow col2"><span class="lt">${esc(u.name || u.email)}</span>${accSel(it, u)}</div>`).join('') + `<p class="sub small">${t('modeNote')}</p>`;
+      const accBox = !CLOUD ? `<p class="sub">${t('accessNote')}</p>` : e.zone !== 'company' ? '' : !manages(it) ? `<p class="sub">${t('accessAdminOnly')}</p>`
+        : au.users.filter((u) => u.id !== au.ownerUid && u.id !== au.uid && (u.role === 'user' || (u.role === 'admin' && sup()))).map((u) => `<div class="lrow col2"><span class="lt">${esc(u.name || u.email)}</span>${accSel(it, u)}</div>`).join('') + `<p class="sub small">${t('modeNote')}</p>`;
       right = `${accBox ? `<div class="box"><div class="bh">${t('access')}</div>${accBox}</div>` : ''}
         <div class="box"><div class="bh">${t('usedIn')}</div><b class="bigN">${used}</b></div>
         <div class="acts"><button class="btn ghost sm danger" data-act="delParam" ${used ? 'disabled' : ''} title="${used ? t('cannotDelete') : ''}">${ui.delArm ? t('delSure') : t('del')}</button>
@@ -413,7 +434,7 @@
       const v = S.vectors.find((x) => x.id === e.id); if (!v) return '';
       left = `<div class="bh">${t('vector')}</div><div class="chev stack">${chevron(v, {})}</div>
         <div class="kvs">${ZONES.map((z) => `<div class="kv"><span>${t('zone_' + z)}</span><b>${esc((item(z, v[z]) || {}).name || '—')}</b></div>`).join('')}</div>`;
-      const canShare = au.role === 'admin' || v.owner === au.uid;
+      const canShare = v.owner === au.uid || manages(item('company', v.company));
       const others = au.users.filter((u) => u.id !== v.owner && (u.role === 'admin' || u.role === 'user'));
       const share = !CLOUD ? `<p class="sub">${t('accessNote')}</p>` : (others.map((u) => `<button class="tog" data-act="vecMember" data-uid="${u.id}" ${canShare ? '' : 'disabled'}><span class="sw ${(v.members || []).includes(u.id) || u.role === 'admin' ? 'on' : ''}"><i></i></span><span>${esc(u.name || u.email)}${u.role === 'admin' ? ' · ' + t('acc_admin') : ''}</span></button>`).join('') || `<p class="sub">${t('noOthers')}</p>`)
         + (canShare ? '' : `<p class="sub small">${t('onlyOwner')}</p>`);
@@ -656,6 +677,10 @@
       if (S.draft[e.zone] === e.id) delete S.draft[e.zone]; ui.edit = null; commit();
     },
     rmImg() { curParam().img = ''; commit(); },
+    mbSigPlain(d) {
+      const it = curParam(), m = it.s.mailboxes[+d.i], site = String(it.s.website || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+      m.sig = [S.user.name, it.name, site].filter(Boolean).join('\n'); commit();
+    },
     mbPrimary(d) { const ms = curParam().s.mailboxes, own = ms[+d.i].owner; ms.forEach((m, i) => { if (m.owner === own) m.primary = i === +d.i; }); commit(); },
     mbRemove(d) { const m = curParam().s.mailboxes, own = m[+d.i].owner; m.splice(+d.i, 1); const rest = m.filter((x) => x.owner === own); if (rest.length && !rest.some((x) => x.primary)) rest[0].primary = true; commit(); },
     crRemove(d) { curParam().s.criteria.splice(+d.i, 1); commit(); },
@@ -754,6 +779,7 @@
     if (el.dataset.u) { S.user[el.dataset.u] = el.value; save(); return; }
     if (el.dataset.lgname) { legendOf(el.dataset.lgname).label = el.value; save(); return; }
     if (el.dataset.lgcolor) { legendOf(el.dataset.lgcolor).color = el.value; save(); return; }
+    if (p && el.dataset.mbsig) { p.s.mailboxes[+el.dataset.mbsig].sig = el.value; save(); return; }
     if (p && el.dataset.s) { p.s[el.dataset.s] = el.value; save(); return; }
     if (p && el.hasAttribute('data-pname')) { p.name = el.value; save(); return; }
     if (!c) return;
@@ -767,12 +793,13 @@
     const el = e.target, c = cur();
     if (el.hasAttribute('data-file')) { takeImage(el.files[0]); return; }
     if (el.hasAttribute('data-leadfile')) { const f = el.files[0]; if (f && c) f.text().then((txt) => importLeads(c, txt)); return; }
-    if (el.hasAttribute('data-seqfrom') && c) { seqOf(c).from = el.value; save(); return; }
+    if (el.hasAttribute('data-seqfrom') && c) { seqOf(c).from = el.value; commit(); return; }
     if (el.hasAttribute('data-show')) { S.show = el.value; commit(); return; }
     if (el.dataset.urole) { const u = au.users.find((x) => x.id === el.dataset.urole); if (u) u.role = el.value; Cloud.setRole(el.dataset.urole, el.value); render(); return; }
     if (el.dataset.cacc) {
       const [u, cid] = el.dataset.cacc.split('|'), co = item('company', cid); co.access = co.access || {};
-      if (el.value) co.access[u] = el.value; else delete co.access[u];
+      co.managers = managersOf(co).filter((x) => x !== u);
+      if (el.value === 'manage') { delete co.access[u]; co.managers.push(u); } else if (el.value) co.access[u] = el.value; else delete co.access[u];
       commit(); return;
     }
     if (el.dataset.guard) { const list = el.value.split('\n').map((x) => x.trim()).filter(Boolean); au.guards[el.dataset.guard] = list; Cloud.setGuard(el.dataset.guard, list); return; }
@@ -839,7 +866,7 @@
         else if (name === 'taken') S.taken = d;
         else if (name === 'workspace') { S.legend = (d && d.legend) || S.legend; S.docs = (d && d.docs) || []; }
         // Parameters created before access lists existed get them from the admin's program, once.
-        if (name === 'params' && admin()) setTimeout(() => {
+        if (name === 'params' && au.super) setTimeout(() => {
           let fixed = false;
           S.zones.company.forEach((co) => { if (!co.access) { co.access = {}; co.access[au.uid] = 'shared'; fixed = true; } });
           ZONES.forEach((z) => S.zones[z].forEach((it) => { if (!it.acl) fixed = true; if (!it.by) { it.by = au.uid; fixed = true; } }));

@@ -386,3 +386,7 @@ p.later{padding:22px 8px;color:var(--mut)}
 .prevbox pre{white-space:pre-wrap;font:inherit;line-height:1.5;margin-top:8px}
 @media (max-width:700px){.ltable{max-height:none}.fromf{width:100%}.fromf .in{flex:1;min-width:0}.sth{flex-wrap:wrap}}
 .tabs{display:flex;gap:22px;border-bottom:1px solid var(--line);padding-bottom:10px}
+
+.mbx{border:1px solid var(--line);border-radius:10px;padding:6px 10px 10px;margin-bottom:8px}.mbx textarea{font-size:13px;line-height:1.45}
+.link.small{font-size:12px;margin-top:6px;display:inline-block}
+.rolefix{width:190px;flex:none;font-weight:600;color:var(--mut);padding:0 10px}

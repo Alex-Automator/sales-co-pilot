@@ -34,7 +34,7 @@ const LEAD_COLS = {
   companyPhone: ['companyphone', 'corporatephonenumber'], country: ['country'], state: ['state'], city: ['city'],
   seniority: ['seniority'], employees: ['employees'], fit: ['fitevidence'], source: ['source'],
 };
-const SEQ_VARS = ['firstName', 'lastName', 'company', 'jobTitle', 'city', 'myName'];
+const SEQ_VARS = ['firstName', 'lastName', 'company', 'jobTitle', 'city', 'myName', 'signature'];
 const SENIORITY = ['Owner / C-level', 'VP', 'Director', 'Manager'];
 // Default grey outline pictures for parameters without an image.
 const ICONS = {

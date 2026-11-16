@@ -3,10 +3,13 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
     function userPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function metaPath() { return /databases/$(database)/documents/meta/app; }
     function active() { return signedIn() && exists(userPath()) && get(userPath()).data.role in ['admin', 'user']; }
     function admin() { return signedIn() && exists(userPath()) && get(userPath()).data.role == 'admin'; }
+    // The super admin is the first person who signed in. It is recorded once and cannot be changed from the app.
+    function owner() { return signedIn() && exists(metaPath()) && get(metaPath()).data.adminUid == request.auth.uid; }
+    function inAcl(d) { return request.auth.uid in d.acl; }
 
-    // The first person to sign in claims the admin seat; it can never be changed from the app.
     match /meta/app {
       allow read: if signedIn();
       allow create: if signedIn() && request.resource.data.adminUid == request.auth.uid;
@@ -15,57 +18,68 @@ service cloud.firestore {
       allow read: if signedIn() && (uid == request.auth.uid || active());
       allow create: if signedIn() && uid == request.auth.uid
         && (request.resource.data.role == 'pending'
-          || (request.resource.data.role == 'admin'
-            && get(/databases/$(database)/documents/meta/app).data.adminUid == request.auth.uid));
-      allow update: if admin() || (uid == request.auth.uid && request.resource.data.role == resource.data.role);
-      allow delete: if admin();
+          || (request.resource.data.role == 'admin' && get(metaPath()).data.adminUid == request.auth.uid));
+      // Super admin: any role for anyone, but always stays admin. Admin: only lets operators in or out.
+      // Everyone: may edit their own record without touching the role.
+      allow update: if (owner() && (uid != request.auth.uid || request.resource.data.role == 'admin'))
+        || (admin() && uid != get(metaPath()).data.adminUid
+          && resource.data.role in ['pending', 'user'] && request.resource.data.role in ['pending', 'user'])
+        || (uid == request.auth.uid && request.resource.data.role == resource.data.role);
+      allow delete: if owner() && uid != request.auth.uid;
     }
-    // Parameters. Audiences and topics carry acl ['*'] and are shared by the team.
-    // Companies and their directions are visible only to people the admin gave access to.
+
+    // Parameters. Audiences and topics carry acl ['*'] and are shared by the team. Companies and their
+    // directions are visible only to people listed on them: operators with access and the admins who manage them.
     function paramMine(d) { return '*' in d.acl || request.auth.uid in d.acl; }
     match /params/{id} {
-      allow read: if admin() || (active() && paramMine(resource.data));
-      allow create: if admin() || (active() && paramMine(request.resource.data));
-      // An operator may edit a company's settings (their own mailboxes, for example) but not who has access to it.
-      allow update: if admin() || (active() && paramMine(resource.data)
-        && request.resource.data.acl == resource.data.acl
-        && request.resource.data.get('access', null) == resource.data.get('access', null));
-      allow delete: if admin() || (active() && paramMine(resource.data));
+      allow read: if owner() || (active() && paramMine(resource.data));
+      allow create: if owner() || (active() && paramMine(request.resource.data)
+        && request.resource.data.get('managers', []) == []);
+      allow update: if owner()
+        // an admin who manages the company may change operators' access, but not who manages it
+        || (admin() && request.auth.uid in resource.data.get('managers', [])
+          && request.resource.data.get('managers', []) == resource.data.get('managers', []))
+        // an operator may edit settings (their own mailboxes, for example) but not access
+        || (active() && paramMine(resource.data)
+          && request.resource.data.acl == resource.data.acl
+          && request.resource.data.get('access', null) == resource.data.get('access', null)
+          && request.resource.data.get('managers', []) == resource.data.get('managers', []));
+      allow delete: if owner() || (active() && paramMine(resource.data));
     }
     // Colour legend and document library.
     match /workspace/{id} { allow read, write: if active(); }
-    // Contacts the admin has closed for one person: that person can read the list, only the admin writes it.
+    // Contacts closed for one person: that person can read the list, admins write it.
     match /guards/{uid} {
       allow read: if admin() || (signedIn() && uid == request.auth.uid);
       allow write: if admin();
     }
     // "Already in work" markers, one per contact email in a company. Anyone approved can check one exact
-    // email, but only its owner and the admin can list them, so the client base cannot be read through them.
+    // email, but only its owner and the super admin can list them, so the client base cannot be read through them.
     match /taken/{id} {
       allow get: if active();
-      allow list: if admin() || (active() && resource.data.owner == request.auth.uid);
+      allow list: if owner() || (active() && resource.data.owner == request.auth.uid);
       allow create: if active() && request.resource.data.owner == request.auth.uid;
-      allow update, delete: if admin() || (active() && resource.data.owner == request.auth.uid);
+      allow update, delete: if owner() || (active() && resource.data.owner == request.auth.uid);
     }
 
-    // A vector is visible to its owner, to people it was shared with (acl) and to the admin.
+    // Vectors, cards, campaign recipients and documents list on themselves (acl) everyone who may see them:
+    // the owner, people it was shared with, operators on the company's shared base, the company's admins.
     match /vectors/{id} {
-      allow read: if admin() || (active() && request.auth.uid in resource.data.acl);
-      allow create: if active() && request.resource.data.owner == request.auth.uid && request.auth.uid in request.resource.data.acl;
-      allow update, delete: if admin() || (active() && resource.data.owner == request.auth.uid);
+      allow read: if owner() || (active() && inAcl(resource.data));
+      allow create: if active() && request.resource.data.owner == request.auth.uid && inAcl(request.resource.data);
+      allow update, delete: if owner() || (active() && resource.data.owner == request.auth.uid) || (admin() && inAcl(resource.data));
     }
     match /cards/{id} {
-      allow read, update, delete: if admin() || (active() && request.auth.uid in resource.data.acl);
-      allow create: if admin() || (active() && request.auth.uid in request.resource.data.acl);
+      allow read, update, delete: if owner() || (active() && inAcl(resource.data));
+      allow create: if owner() || (active() && inAcl(request.resource.data));
     }
-    // Recipients of campaigns: same visibility as contact cards.
     match /leads/{id} {
-      allow read, update, delete: if admin() || (active() && request.auth.uid in resource.data.acl);
-      allow create: if admin() || (active() && request.auth.uid in request.resource.data.acl);
+      allow read, update, delete: if owner() || (active() && inAcl(resource.data));
+      allow create: if owner() || (active() && inAcl(request.resource.data));
     }
     match /gdocs/{id} {
-      allow read, update, delete: if admin() || (active() && request.auth.uid in resource.data.acl);
-      allow create: if admin() || (active() && request.auth.uid in request.resource.data.acl);
+      allow read, update, delete: if owner() || (active() && inAcl(resource.data));
+      allow create: if owner() || (active() && inAcl(request.resource.data));
     }
   }
 }
