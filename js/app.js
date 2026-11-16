@@ -312,7 +312,7 @@
     const jt = String(lead.f.jobTitle || '').toLowerCase();
     return vs.find((k) => words(whoOf(s, k)).some((w) => jt.includes(w))) || 'A';
   }
-  const modeOf = (st, k) => st.mode || (k === 'B' ? 'gpt' : 'claude');
+  const modeOf = (st, k) => st.mode || { B: 'gpt', C: 'manual' }[k] || 'claude';
   const stepReady = (st, i) => !!(st.body.trim() && (i > 0 || st.subject.trim()));
   const langName = (code) => { try { const n = new Intl.DisplayNames([S.lang === 'uk' ? 'uk' : 'en'], { type: 'language' }).of(code); return n[0].toUpperCase() + n.slice(1); } catch (e) { return code; } };
   function sampleFor(c) {
@@ -342,7 +342,8 @@
       <input class="in" data-seq="${i}|subject" placeholder="${i ? t('subjectRe').replace('{k}', k) : t('subject')}" value="${esc(st.subject)}">
       <textarea class="in" rows="${i ? 4 : 6}" data-seq="${i}|body" placeholder="${i ? (mode === 'manual' ? t('followPhManual') : t('followPh')) : t('body')}">${esc(st.body)}</textarea>
       <div class="vars">${SEQ_VARS.map((x) => `<button class="chip" data-act="seqVar" data-i="${i}" data-v="${x}">{{${x}}}</button>`).join('')}</div>
-      <div class="acts tight">${mode === 'manual' ? '' : `<button class="btn ghost sm" disabled title="${t('stage')} 3">${i ? t('aiFollow') : t('aiDraft')}</button>`}<button class="btn ghost sm" disabled title="${t('stage')} 3">${t('aiReview')}</button>
+      <div class="acts tight">${mode === 'manual' ? `<button class="btn ghost sm" disabled title="${t('stage')} 3">${t('polishClaude')}</button><button class="btn ghost sm" disabled title="${t('stage')} 3">${t('polishGpt')}</button>`
+        : `<button class="btn ghost sm" disabled title="${t('stage')} 3">${i ? t('aiFollow') : t('aiDraft')}</button><button class="btn ghost sm" disabled title="${t('stage')} 3">${t('aiReview')}</button>`}
         <button class="btn ghost sm" data-act="seqPreview" data-i="${i}">${t('preview')}</button>
         <button class="btn sm" data-act="seqApprove" data-i="${i}" ${st.status === 'approved' || stepReady(st, i) ? '' : 'disabled'}>${st.status === 'approved' ? t('unapprove') : t('approve')}</button></div>
       ${ui.prev === i ? `<div class="prevbox"><small>${t('previewFor')} ${esc([smp.firstName, smp.lastName].filter(Boolean).join(' '))}</small><b>${esc(fillVars(st.subject || 'Re: ' + list[0].subject, smp))}</b><pre>${esc(fillVars(withSig(st.body, smp.signature), smp))}</pre></div>` : ''}</div>`; }).join('');
