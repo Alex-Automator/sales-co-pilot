@@ -335,6 +335,12 @@
     const head2 = `<div class="row2 vset"><label class="fl"><span>${t('sendLang')}</span><select class="in" data-seqlang>${LANGS.map((l) => `<option value="${l}" ${seq.lang === l ? 'selected' : ''}>${esc(langName(l))}</option>`).join('')}</select></label><span></span></div>
       ${seq.lang !== 'en' ? `<p class="sub small">${t('langNote').replace('{l}', langName(seq.lang))}</p>` : ''}`;
     const done = list.filter((x) => x.status === 'approved').length, smp = Object.assign({}, sampleFor(c), { signature: sigOf(co, seq.from || primaryMailbox(co)) });
+    // AI buttons work only in the real program: the keys live on the server, the demo has none.
+    const aiBtn = (i, op, eng, label, off) => { const me = `${i}|${op}|${eng}`; return `<button class="btn ghost sm" data-act="aiGo" data-i="${i}" data-op="${op}" data-eng="${eng}" ${!CLOUD || ui.busy || off ? 'disabled' : ''} title="${CLOUD ? t('eng_' + eng) : t('aiDemoOnly')}">${ui.busy === me ? t('aiBusy') : label}</button>`; };
+    const revBox = (st, i) => { const r = st.review; if (!r) return ''; const diff = r.body && (r.body !== st.body || (r.subject || '') !== (st.subject || ''));
+      return `<div class="revbox ${r.ok ? 'ok' : ''}"><b>${t(r.ok ? 'revOk' : 'revFix')} · ${t('eng_' + r.by)}</b>${r.issues && r.issues.length ? `<ul>${r.issues.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+        ${diff ? `<small>${t('revSuggest')}</small>${r.subject ? `<b class="rs">${esc(r.subject)}</b>` : ''}<pre>${esc(r.body)}</pre>` : ''}
+        <div class="acts tight">${diff ? `<button class="btn sm" data-act="seqApply" data-i="${i}">${t('revApply')}</button>` : ''}<button class="btn ghost sm" data-act="seqRevHide" data-i="${i}">${t('dismiss')}</button></div></div>`; };
     const steps = list.map((st, i) => { const mode = modeOf(st, k); return `<div class="step st-${st.status}" data-step="${i}"><div class="sth"><b>${t('letter')} ${k}${i + 1}</b>${i ? `<span class="ty">${t('ifSilent')}</span>` : ''}
         <label class="dayl" title="${t('dayHint')}">${t('dayN')} <input class="in" type="number" min="0" data-seq="${i}|day" value="${+st.day || 0}" ${i === 0 ? 'disabled' : ''}></label>
         <span class="stt">${t('seq_' + st.status)}</span>${i > 0 && i === list.length - 1 ? `<button class="link" data-act="seqDel" data-i="${i}">×</button>` : ''}</div>
@@ -342,11 +348,11 @@
       <input class="in" data-seq="${i}|subject" placeholder="${i ? t('subjectRe').replace('{k}', k) : t('subject')}" value="${esc(st.subject)}">
       <textarea class="in" rows="${i ? 4 : 6}" data-seq="${i}|body" placeholder="${i ? (mode === 'manual' ? t('followPhManual') : t('followPh')) : t('body')}">${esc(st.body)}</textarea>
       <div class="vars">${SEQ_VARS.map((x) => `<button class="chip" data-act="seqVar" data-i="${i}" data-v="${x}">{{${x}}}</button>`).join('')}</div>
-      <div class="acts tight">${mode === 'manual' ? `<button class="btn ghost sm" disabled title="${t('stage')} 3">${t('polishClaude')}</button><button class="btn ghost sm" disabled title="${t('stage')} 3">${t('polishGpt')}</button>`
-        : `<button class="btn ghost sm" disabled title="${t('stage')} 3">${i ? t('aiFollow') : t('aiDraft')}</button><button class="btn ghost sm" disabled title="${t('stage')} 3">${t('aiReview')}</button>`}
+      <div class="acts tight">${mode === 'manual' ? aiBtn(i, 'polish', 'claude', t('polishClaude'), !st.body.trim()) + aiBtn(i, 'polish', 'gpt', t('polishGpt'), !st.body.trim())
+        : aiBtn(i, 'draft', mode, i ? t('aiFollow') : t('aiDraft')) + aiBtn(i, 'review', mode === 'gpt' ? 'claude' : 'gpt', t('aiReview'), !st.body.trim())}
         <button class="btn ghost sm" data-act="seqPreview" data-i="${i}">${t('preview')}</button>
         <button class="btn sm" data-act="seqApprove" data-i="${i}" ${st.status === 'approved' || stepReady(st, i) ? '' : 'disabled'}>${st.status === 'approved' ? t('unapprove') : t('approve')}</button></div>
-      ${ui.prev === i ? `<div class="prevbox"><small>${t('previewFor')} ${esc([smp.firstName, smp.lastName].filter(Boolean).join(' '))}</small><b>${esc(fillVars(st.subject || 'Re: ' + list[0].subject, smp))}</b><pre>${esc(fillVars(withSig(st.body, smp.signature), smp))}</pre></div>` : ''}</div>`; }).join('');
+      ${revBox(st, i)}${ui.prev === i ? `<div class="prevbox"><small>${t('previewFor')} ${esc([smp.firstName, smp.lastName].filter(Boolean).join(' '))}</small><b>${esc(fillVars(st.subject || 'Re: ' + list[0].subject, smp))}</b><pre>${esc(fillVars(withSig(st.body, smp.signature), smp))}</pre></div>` : ''}</div>`; }).join('');
     return `<div class="seqhead"><label class="fromf"><span>${t('fromMailbox')}</span>${from}</label><span class="ty">${done} / ${list.length} ${t('approvedOf')}</span></div>
       ${head2}${vtabs}${steps}${list.length < 5 ? `<button class="add" data-act="seqAdd">+ ${t('letter')} ${k}${list.length + 1} · ${t('addFollow')}</button>` : ''}<p class="sub small">${t('chainNote')} ${t('seqNote')}</p>`;
   }
@@ -639,7 +645,7 @@
     document.documentElement.lang = S.lang === 'uk' ? 'uk' : 'en';
     document.getElementById('app').innerHTML = top() + html +
       `<footer class="demo">VECTOR ${VERSION}${CLOUD ? ' · ' + esc(S.user.email) : ` · ${t('demo')} · <button class="link" data-act="reset">${t('reset')}</button>`}</footer>`
-      + (ui.err ? `<div class="toast"><b>${t('saveErr')}</b><span>${esc(ui.err)}</span><button class="link" data-act="errClose">${t('dismiss')}</button></div>` : '') + vCardModal() + vEditModal() + vAI();
+      + (ui.err ? `<div class="toast"><b>${t(ui.errAi ? 'aiErr' : 'saveErr')}</b><span>${esc(ui.err)}</span><button class="link" data-act="errClose">${t('dismiss')}</button></div>` : '') + vCardModal() + vEditModal() + vAI();
     const nb = document.querySelector('.board'); if (nb && keepX) nb.scrollLeft = keepX;
     const af = document.querySelector('[autofocus]'); if (af) af.focus();
     ui.fresh = null; ui.popped = null;
@@ -654,7 +660,7 @@
     signIn() { au.err = ''; Cloud.signIn(); },
     signOut() { ui.menu = null; Cloud.signOut(); },
     usersOpen() { ui.edit = { kind: 'users' }; render(); },
-    errClose() { ui.err = ''; render(); },
+    errClose() { ui.err = ''; ui.errAi = false; render(); },
     seed() { S.zones = demoState().zones; let n = 0; ZONES.forEach((z) => S.zones[z].forEach((it) => { it.ord = ++n; it.by = au.uid; if (z === 'company') { it.s.mailboxes = []; it.access = {}; it.access[au.uid] = 'shared'; } })); commit(); },
     vecMember(d) {
       const v = S.vectors.find((x) => x.id === ui.edit.id); v.members = v.members || [];
@@ -691,6 +697,23 @@
       commit();
     },
     seqApprove(d) { const st = stepsOf(cur())[+d.i]; st.status = st.status === 'approved' ? 'draft' : 'approved'; commit(); },
+    // The answer may arrive after the data was refreshed from the cloud, so the letter is found again by its ids.
+    aiGo(d) {
+      const c = cur(), q = seqOf(c), k = curVar(q), list = stepsOf(c), i = +d.i, st = list[i], f = c.f || {};
+      if (ui.busy || !CLOUD) return; ui.busy = `${i}|${d.op}|${d.eng}`; render();
+      const find = () => { const c2 = S.cards.find((x) => x.id === c.id), q2 = c2 && c2.seq; if (!q2) return null; return (k === 'A' ? q2.steps : (q2.alt[k] || {}).steps || []).find((x) => x.id === st.id); };
+      Cloud.ai({ op: d.op, engine: d.eng, vid: c.vid, step: i, ui: S.lang, letter: { subject: st.subject, body: st.body }, first: { subject: list[0].subject, body: list[0].body },
+        card: { title: c.title, notes: c.notes || '', type: c.type, jobTitle: f.jobTitle || '', company: f.company || '', who: varsOf(q).length > 1 && q.split === 'role' ? whoOf(q, k) : '' } })
+        .then((r) => {
+          ui.busy = ''; const s2 = find(); if (!s2) { render(); return; }
+          if (d.op === 'review') { s2.review = { ok: !!r.ok, issues: r.issues || [], subject: r.subject || '', body: r.body || '', by: r.engine }; if (r.ok && s2.status === 'draft') s2.status = 'reviewed'; }
+          else { s2.subject = i > 0 && d.op === 'draft' ? '' : r.subject || s2.subject; s2.body = r.body; s2.status = 'draft'; s2.by = r.engine; s2.review = null; }
+          commit();
+        })
+        .catch((e) => { ui.busy = ''; ui.err = String(e && e.message ? e.message : e); ui.errAi = true; render(); });
+    },
+    seqApply(d) { const st = stepsOf(cur())[+d.i], r = st.review; if (!r) return; st.subject = r.subject; st.body = r.body; st.status = 'reviewed'; st.review = null; commit(); },
+    seqRevHide(d) { stepsOf(cur())[+d.i].review = null; commit(); },
     seqPreview(d) { ui.prev = ui.prev === +d.i ? -1 : +d.i; render(); },
     seqVar(d) {
       const st = stepsOf(cur())[+d.i], el = document.querySelector(`[data-seq="${d.i}|body"]`), pos = el ? el.selectionStart : st.body.length;
@@ -845,6 +868,7 @@
       const box = el.closest('.step'), btn = box && box.querySelector('[data-act="seqApprove"]');
       if (k !== 'day' && st.status !== 'draft') { st.status = 'draft'; if (box) { box.className = 'step st-draft'; box.querySelector('.stt').textContent = t('seq_draft'); if (btn) btn.textContent = t('approve'); } }
       if (btn) btn.disabled = !stepReady(st, +i);
+      document.querySelectorAll(`[data-act="aiGo"][data-i="${i}"]`).forEach((b) => { if (b.dataset.op !== 'draft') b.disabled = !CLOUD || !!ui.busy || !st.body.trim(); });
       save(); return;
     }
     if (el.hasAttribute('data-cq')) { ui.cq = el.value; const pos = el.selectionStart; render(); const n = document.querySelector('[data-cq]'); n.focus(); n.setSelectionRange(pos, pos); return; }
@@ -964,7 +988,7 @@
         S.vectors.forEach((v) => { out.vectors[v.id] = v; }); S.cards.forEach((c) => { out.cards[c.id] = c; }); S.gdocs.forEach((g) => { out.gdocs[g.id] = g; }); (S.taken || []).forEach((x) => { out.taken[x.id] = x; }); S.leads.forEach((l) => { out.leads[l.id] = l; });
         return out;
       },
-      error(e) { ui.err = e && e.message ? e.message : String(e); render(); },
+      error(e) { ui.err = e && e.message ? e.message : String(e); ui.errAi = false; render(); },
     });
   }
   render();

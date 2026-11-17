@@ -408,3 +408,5 @@ p.later{padding:22px 8px;color:var(--mut)}
 .srow .lt{font-size:13.5px}.sv{white-space:nowrap;color:var(--mut)}.in.nin{width:68px;display:inline-block;text-align:center;padding:6px 4px}
 .modesel{font-size:12.5px;padding:6px 8px;color:var(--mut)}.sth .ty{margin-right:auto}
 .vset+.vtabs,.vtabs{margin-top:10px}
+.revbox{margin-top:12px;border:1px solid #E0A100;background:#FFF8E6;border-radius:8px;padding:12px;font-size:13.5px}.revbox.ok{border-color:#12995B;background:#EEF9F3}
+.revbox ul{margin:8px 0 0 18px}.revbox li{margin:3px 0}.revbox small{display:block;color:var(--mut);margin-top:10px}.revbox pre{white-space:pre-wrap;font:inherit;line-height:1.5;margin-top:6px}.revbox .rs{display:block;margin-top:6px}
