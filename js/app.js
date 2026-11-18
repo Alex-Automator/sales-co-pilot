@@ -234,19 +234,49 @@
   }
   // ---------- recipients of a campaign ----------
   const leadName = (l) => [l.f.firstName, l.f.lastName].filter(Boolean).join(' ') || l.f.email;
+  const hostOf = (w) => String(w || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split(/[/?#]/)[0];
+  // Website check: one request per company website, at most three at a time; the answer is written to every recipient of that company.
+  function siteCheck(cid) {
+    const c = S.cards.find((x) => x.id === cid), q = ((c && c.check) || {}).q || ''; if (!c || !q.trim() || ui.site) return;
+    const mine = () => S.leads.filter((l) => l.cid === cid), fresh = (l) => l.chk && l.chk.q === q && l.chk.s !== 'err';
+    const queue = [], seen = {};
+    mine().forEach((l) => { const h = hostOf(l.f.website); if (!h) { if (!fresh(l)) l.chk = { s: 'nosite', q }; return; } if (!fresh(l) && !seen[h]) { seen[h] = 1; queue.push({ h, website: l.f.website, company: l.f.company || '' }); } });
+    ui.site = { total: queue.length, done: 0, stop: false }; commit();
+    const next = () => {
+      const job = queue.shift(); if (!job || ui.site.stop) { if (!--ui.site.live) { ui.site = null; commit(); } return; }
+      Cloud.research({ vid: c.vid, website: job.website, company: job.company, question: q }).catch((e) => { const m = String(e && e.message || e); if (/limit|access|approved|Sign in/i.test(m)) { ui.site.stop = true; ui.err = m; ui.errAi = true; } return { s: 'err', ev: m }; })
+        .then((r) => { mine().forEach((l) => { if (hostOf(l.f.website) === job.h) l.chk = { s: r.s, ev: r.ev || '', proj: r.proj || '', url: r.url || '', q }; }); ui.site.done++; commit(); next(); });
+    };
+    ui.site.live = Math.min(3, queue.length) || 1; for (let i = 0; i < ui.site.live; i++) next();
+  }
+  function vSiteCheck(c, all) {
+    if (c.type !== 'campaign' || !all.length) return '';
+    const q = (c.check || {}).q || '', n = { yes: 0, no: 0, nosite: 0, err: 0 }; let off = 0, todo = 0;
+    all.forEach((l) => { if (l.off) off++; if (l.chk && l.chk.q === q) n[l.chk.s]++; else todo++; });
+    const checked = all.length - todo, toDrop = all.filter((l) => !l.off && l.chk && l.chk.q === q && (l.chk.s === 'no' || l.chk.s === 'nosite')).length;
+    return `<div class="sitebox"><div class="bh">${t('siteTitle')}</div><p class="sub small">${t('siteNote')}</p>
+      <div class="acts tight"><input class="in grow" data-chkq placeholder="data center, data centre, mission critical" value="${esc(q)}" ${ui.site ? 'disabled' : ''}>
+        ${ui.site ? `<span class="sub small">${t('siteRun')} ${ui.site.done} / ${ui.site.total}</span><button class="btn ghost sm" data-act="siteStop">${t('stop')}</button>`
+        : `<button class="btn sm" data-act="siteGo" ${CLOUD && q.trim() ? '' : 'disabled'} title="${CLOUD ? '' : t('aiDemoOnly')}">${t(todo || n.err ? 'siteGo' : 'siteAgain')}</button>`}</div>
+      ${checked ? `<p class="sitesum"><span class="ok">${t('site_yes')}: ${n.yes}</span><span>${t('site_no')}: ${n.no}</span><span>${t('site_nosite')}: ${n.nosite}</span>${n.err ? `<span>${t('site_err')}: ${n.err}</span>` : ''}${off ? `<span>${t('siteOff')}: ${off}</span>` : ''}</p>
+        <div class="acts tight">${toDrop && !ui.site ? `<button class="btn ghost sm" data-act="siteDrop">${t('siteDrop')} (${toDrop})</button>` : ''}${off ? `<button class="link small" data-act="siteBack">${t('siteBack')}</button>` : ''}</div>` : ''}</div>`;
+  }
+  const chkCell = (l, q) => { const k = l.chk && l.chk.q === q ? l.chk : null; if (!k) return ''; const tip = esc([k.ev, k.url].filter(Boolean).join(' · '));
+    return k.s === 'yes' ? `<span class="chk yes" title="${tip}">✓ ${esc(k.proj || t('site_yes'))}</span>` : `<span class="chk" title="${tip}">${t('site_' + k.s)}</span>`; };
   function vRecipients(c) {
-    const all = S.leads.filter((l) => l.cid === c.id), q = ui.lq.trim().toLowerCase();
+    const all = S.leads.filter((l) => l.cid === c.id), q = ui.lq.trim().toLowerCase(), cq = (c.check || {}).q || '';
     const list = all.filter((l) => !q || [leadName(l), l.f.company, l.f.email, l.f.jobTitle].join(' ').toLowerCase().includes(q));
-    const rows = list.slice(0, 200).map((l) => `<tr><td>${esc(leadName(l))}</td><td>${esc(l.f.jobTitle || '')}</td><td>${esc(l.f.company || '')}</td><td>${esc(l.f.email)}</td>
+    const rows = list.slice(0, 200).map((l) => `<tr class="${l.off ? 'off' : ''}"><td>${esc(leadName(l))}</td><td>${esc(l.f.jobTitle || '')}</td><td>${esc(l.f.company || '')}</td><td>${esc(l.f.email)}</td>
+      <td>${chkCell(l, cq)}${l.off ? ` <button class="link" data-act="leadOn" data-id="${l.id}">${t('leadOn')}</button>` : ''}</td>
       <td>${blockedWhy(l) ? `<span class="blk" title="${t(blockedWhy(l) === 'admin' ? 'blockedAdmin' : 'blockedTaken')}">${t('blockedBadge')}</span>` : l.card ? `<span class="ty">${t('hasCard')}</span>` : `<button class="link" data-act="leadCard" data-id="${l.id}">${t('toCard')}</button>`}</td>
       <td><button class="link" data-act="leadDel" data-id="${l.id}">×</button></td></tr>`).join('');
     const imp = ui.imp ? `<p class="hint">${ui.imp.err ? t(ui.imp.err) : `${ui.imp.added} ${t('impAdded')} · ${ui.imp.dup} ${t('impDup')} · ${ui.imp.bad} ${t('impBad')}`}</p>` : '';
     return `<textarea class="in" rows="4" data-leadpaste placeholder="${t('pasteHint')}"></textarea>
       <div class="acts tight"><button class="btn sm" data-act="leadImport">${t('importBtn')}</button><label class="btn ghost sm filebtn">${t('uploadCsv')}<input type="file" accept=".csv,.tsv,.txt,text/csv" data-leadfile hidden></label></div>
       <p class="sub small">${t('sheetLater')}</p>${imp}${ui.checkLeft ? `<p class="sub small">${t('checking')}: ${ui.checkLeft} ${t('left')}</p>` : ''}
-      ${all.length ? `<div class="acts tight"><input class="in search" data-lq placeholder="${t('searchLeads')}" value="${esc(ui.lq)}"><span class="sub small">${Math.min(200, list.length)} ${t('shown')} ${t('ofTotal')} ${all.length}</span>
+      ${vSiteCheck(c, all)}${all.length ? `<div class="acts tight"><input class="in search" data-lq placeholder="${t('searchLeads')}" value="${esc(ui.lq)}"><span class="sub small">${Math.min(200, list.length)} ${t('shown')} ${t('ofTotal')} ${all.length}</span>
         <button class="btn ghost sm danger" data-act="leadClear">${ui.delArm ? t('delSure') : t('removeAll')}</button></div>
-      <table class="ltable"><tr><th>${t('name')}</th><th>${t('jobTitle')}</th><th>${t('company')}</th><th>${t('email')}</th><th></th><th></th></tr>${rows}</table>` : ''}`;
+      <table class="ltable"><tr><th>${t('name')}</th><th>${t('jobTitle')}</th><th>${t('company')}</th><th>${t('email')}</th><th>${t('siteCol')}</th><th></th><th></th></tr>${rows}</table>` : ''}`;
   }
   // Reads rows copied from a spreadsheet (tabs) or a CSV file (commas or semicolons, quotes allowed).
   function parseTable(text) {
@@ -317,16 +347,19 @@
   const langName = (code) => { try { const n = new Intl.DisplayNames([S.lang === 'uk' ? 'uk' : 'en'], { type: 'language' }).of(code); return n[0].toUpperCase() + n.slice(1); } catch (e) { return code; } };
   function sampleFor(c) {
     if (c.type === 'contact') { const p = c.title.split(' '); return { firstName: p[0], lastName: p.slice(1).join(' '), company: c.f.company, jobTitle: c.f.jobTitle, city: '' }; }
-    const l = S.leads.find((x) => x.cid === c.id && !blockedWhy(x)); return l ? l.f : { firstName: 'Anna', lastName: 'Berg', company: 'Example AS', jobTitle: 'CEO', city: 'Oslo' };
+    const ok = S.leads.filter((x) => x.cid === c.id && !blockedWhy(x) && !x.off), l = ok.find((x) => x.chk && x.chk.proj) || ok[0];
+    return l ? Object.assign({}, l.f, { project: (l.chk || {}).proj || '' }) : { firstName: 'Anna', lastName: 'Berg', company: 'Example AS', jobTitle: 'CEO', city: 'Oslo' };
   }
-  const fillVars = (text, r) => String(text || '').replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => (k === 'myName' ? S.user.name : k === 'signature' ? r.signature || '' : r[k]) || (k === 'signature' ? '' : m));
+  // A phrase in [[double brackets]] is kept only when every field inside it has a value for this recipient.
+  const optional = (text, r) => String(text || '').replace(/[ \t]*\[\[([\s\S]*?)\]\]/g, (m, inner) => ((inner.match(/\{\{\s*\w+\s*\}\}/g) || []).every((x) => r[x.replace(/[{}\s]/g, '')]) ? ' ' + inner.trim() : '')).replace(/^ +/gm, '');
+  const fillVars = (text, r) => optional(text, r).replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => (k === 'myName' ? S.user.name : k === 'signature' ? r.signature || '' : r[k]) || (k === 'signature' ? '' : m));
   // The signature of the chosen mailbox goes at the end of every letter, unless the text places {{signature}} itself.
   const withSig = (body, sig) => (!sig || /\{\{\s*signature\s*\}\}/.test(body) ? body : body.replace(/\s+$/, '') + '\n\n{{signature}}');
   function vSequence(c) {
     const seq = seqOf(c), v = S.vectors.find((x) => x.id === c.vid), co = v ? item('company', v.company) : null, mbs = myMailboxes(co);
     const from = mbs.length ? `<select class="in" data-seqfrom>${mbs.map((m) => `<option ${((seq.from || primaryMailbox(co)) === m.email) ? 'selected' : ''}>${esc(m.email)}</option>`).join('')}</select>` : `<span class="sub">${t('noMailbox')}</span>`;
     const list = stepsOf(c), vs = varsOf(seq), k = curVar(seq), nextV = ['B', 'C'].find((x) => !seq.alt[x]);
-    const cnt = {}; S.leads.filter((l) => l.cid === c.id && !blockedWhy(l)).forEach((l, n) => { const x = variantOf(seq, l, n); cnt[x] = (cnt[x] || 0) + 1; });
+    const cnt = {}; S.leads.filter((l) => l.cid === c.id && !blockedWhy(l) && !l.off).forEach((l, n) => { const x = variantOf(seq, l, n); cnt[x] = (cnt[x] || 0) + 1; });
     const vtabs = c.type !== 'campaign' ? '' : `<div class="vtabs">${vs.map((x) => `<button class="chip ${x === k ? 'on' : ''}" data-act="seqTab" data-v="${x}">${t('variant')} ${x} · ${cnt[x] || 0}</button>`).join('')}
         ${nextV ? `<button class="chip dash" data-act="seqTabAdd" title="${t('variantHint')}">+ ${t('variant')} ${nextV}</button>` : ''}${k !== 'A' ? `<button class="link small" data-act="seqTabDel">${t('removeVariant')} ${k}</button>` : ''}</div>
       ${vs.length < 2 ? '' : `<div class="row2 vset"><label class="fl"><span>${t('splitHow')}</span><select class="in" data-seqsplit><option value="even" ${seq.split !== 'role' ? 'selected' : ''}>${t('split_even')}</option><option value="role" ${seq.split === 'role' ? 'selected' : ''}>${t('split_role')}</option></select></label>
@@ -674,6 +707,12 @@
     wMove(d) { const i = S.widgets.indexOf(d.id), j = i + +d.d; if (i >= 0 && j >= 0 && j < S.widgets.length) { [S.widgets[i], S.widgets[j]] = [S.widgets[j], S.widgets[i]]; commit(); } },
     ctab(d) { ui.ctab = d.v; ui.imp = null; ui.prev = -1; ui.delArm = false; render(); },
     leadImport() { const el = document.querySelector('[data-leadpaste]'); if (el && el.value.trim()) importLeads(cur(), el.value); },
+    siteGo() { siteCheck(ui.open); },
+    siteStop() { if (ui.site) ui.site.stop = true; render(); },
+    // Leaving people out is the user's decision: the check only proposes it.
+    siteDrop() { const c = cur(), q = (c.check || {}).q || ''; S.leads.forEach((l) => { if (l.cid === c.id && l.chk && l.chk.q === q && (l.chk.s === 'no' || l.chk.s === 'nosite')) l.off = true; }); commit(); },
+    siteBack() { const c = cur(); S.leads.forEach((l) => { if (l.cid === c.id) l.off = false; }); commit(); },
+    leadOn(d) { const l = S.leads.find((x) => x.id === d.id); if (l) l.off = false; commit(); },
     leadDel(d) { S.leads = S.leads.filter((l) => l.id !== d.id); commit(); },
     leadClear() { if (!ui.delArm) { ui.delArm = true; render(); return; } const id = ui.open; S.leads = S.leads.filter((l) => l.cid !== id); ui.delArm = false; ui.imp = null; commit(); },
     leadCard(d) {
@@ -703,7 +742,8 @@
       if (ui.busy || !CLOUD) return; ui.busy = `${i}|${d.op}|${d.eng}`; render();
       const find = () => { const c2 = S.cards.find((x) => x.id === c.id), q2 = c2 && c2.seq; if (!q2) return null; return (k === 'A' ? q2.steps : (q2.alt[k] || {}).steps || []).find((x) => x.id === st.id); };
       Cloud.ai({ op: d.op, engine: d.eng, vid: c.vid, step: i, ui: S.lang, letter: { subject: st.subject, body: st.body }, first: { subject: list[0].subject, body: list[0].body },
-        card: { title: c.title, notes: c.notes || '', type: c.type, jobTitle: f.jobTitle || '', company: f.company || '', who: varsOf(q).length > 1 && q.split === 'role' ? whoOf(q, k) : '' } })
+        card: { title: c.title, notes: c.notes || '', type: c.type, jobTitle: f.jobTitle || '', company: f.company || '', who: varsOf(q).length > 1 && q.split === 'role' ? whoOf(q, k) : '',
+          checkQ: S.leads.some((l) => l.cid === c.id && l.chk && l.chk.s === 'yes') ? (c.check || {}).q || '' : '' } })
         .then((r) => {
           ui.busy = ''; const s2 = find(); if (!s2) { render(); return; }
           if (d.op === 'review') { s2.review = { ok: !!r.ok, issues: r.issues || [], subject: r.subject || '', body: r.body || '', by: r.engine }; if (r.ok && s2.status === 'draft') s2.status = 'reviewed'; }
@@ -861,6 +901,7 @@
     const el = e.target, c = cur(), p = curParam();
     if (el.hasAttribute('data-search')) { ui.q = el.value; const pos = el.selectionStart; render(); const n = document.querySelector('[data-search]'); n.focus(); n.setSelectionRange(pos, pos); return; }
     if (el.hasAttribute('data-lq')) { ui.lq = el.value; const pos = el.selectionStart; render(); const n = document.querySelector('[data-lq]'); n.focus(); n.setSelectionRange(pos, pos); return; }
+    if (el.hasAttribute('data-chkq') && c) { c.check = { q: el.value }; save(); return; }
     if (el.hasAttribute('data-seqwho') && c) { const q = seqOf(c), k = curVar(q); if (k === 'A') q.whoA = el.value; else q.alt[k].who = el.value; save(); return; }
     if (el.dataset.seq && c) {
       const [i, k] = el.dataset.seq.split('|'), st = stepsOf(c)[+i]; st[k] = k === 'day' ? Math.max(0, +el.value || 0) : el.value;
@@ -893,6 +934,7 @@
     if (el.hasAttribute('data-seqfrom') && c) { seqOf(c).from = el.value; commit(); return; }
     if (el.hasAttribute('data-seqsplit') && c) { seqOf(c).split = el.value; commit(); return; }
     if (el.hasAttribute('data-seqwho') && c) { render(); return; }
+    if (el.hasAttribute('data-chkq') && c) { render(); return; }
     if (el.dataset.stepmode && c) { stepsOf(c)[+el.dataset.stepmode].mode = el.value; commit(); return; }
     if (el.hasAttribute('data-seqlang') && c) { seqOf(c).lang = el.value; commit(); return; }
     // The slider loads a ready set of limits; each number can then be changed, but never past the red zone.

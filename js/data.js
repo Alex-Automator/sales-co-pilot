@@ -47,7 +47,7 @@ const SEND_LIMITS = { start: [1, 15], step: [0, 10], cap: [1, 40], gapMin: [2, 6
 function defaultSend() { return Object.assign({ level: 0, from: 9, to: 17, workdays: true, jitter: true, coldSecondary: true, noTrack: true, perDomain: 2, bounce: 3 }, RISK[0]); }
 const LANGS = ['en', 'es', 'de', 'fr', 'it', 'nl', 'sv', 'no', 'da', 'fi', 'pl', 'uk'];
 const TONES = ['direct', 'friendly', 'expert', 'formal', 'brief', 'curious'];
-const SEQ_VARS = ['firstName', 'lastName', 'company', 'jobTitle', 'city', 'myName', 'signature'];
+const SEQ_VARS = ['firstName', 'lastName', 'company', 'jobTitle', 'city', 'project', 'myName', 'signature'];
 const SENIORITY = ['Owner / C-level', 'VP', 'Director', 'Manager'];
 // Default grey outline pictures for parameters without an image.
 const ICONS = {

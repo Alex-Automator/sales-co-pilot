@@ -108,6 +108,8 @@ const Cloud = (function () {
     // Who already works with this contact (a user id), or null. Reads one marker by its exact id; markers cannot be listed.
     // Asks the server to write, polish or check a letter. The AI keys stay on the server.
     ai(payload) { return firebase.app().functions('europe-west1').httpsCallable('ai', { timeout: 130000 })(payload).then((r) => r.data); },
+    // Asks the server to open a company's website and look for the given words.
+    research(payload) { return firebase.app().functions('europe-west1').httpsCallable('research', { timeout: 70000 })(payload).then((r) => r.data); },
     takenBy(id) { return db.collection('taken').doc(id).get().then((s) => (s.exists ? s.data().owner : null)).catch(() => null); },
   };
 })();

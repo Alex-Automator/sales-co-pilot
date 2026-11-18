@@ -16,33 +16,39 @@ const db = () => admin.firestore();
 const param = async (id) => { if (!id) return {}; const s = await db().collection('params').doc(String(id)).get(); return s.exists ? s.data() : {}; };
 
 // A daily cap per person, so that a mistake or a stuck button cannot spend the balance.
-async function countUse(uid) {
+async function countUse(uid, field, limit) {
   const ref = db().collection('usage').doc(`${uid}_${new Date().toISOString().slice(0, 10)}`);
   await db().runTransaction(async (tx) => {
-    const n = ((await tx.get(ref)).data() || {}).n || 0;
-    if (n >= lib.LIMITS.perUserPerDay) throw new HttpsError('resource-exhausted', 'Daily AI limit reached. It resets tomorrow.');
-    tx.set(ref, { n: n + 1, at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    const n = ((await tx.get(ref)).data() || {})[field] || 0;
+    if (n >= limit) throw new HttpsError('resource-exhausted', 'Daily AI limit reached. It resets tomorrow.');
+    tx.set(ref, { [field]: n + 1, at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
   });
 }
 
-// ai({ op, engine, vid, step, ui, letter, first, card }) -> a letter, or a review with a corrected letter.
-exports.ai = onCall({ secrets: [ANTHROPIC_API_KEY, OPENAI_API_KEY], timeoutSeconds: 120, memory: '256MiB' }, async (req) => {
+// Only people the admin approved, and only for vectors they have access to. Returns the vector.
+async function guard(req) {
   if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
   const uid = req.auth.uid, d = req.data || {};
-  if (!['draft', 'polish', 'review'].includes(d.op) || !['claude', 'gpt'].includes(d.engine)) throw new HttpsError('invalid-argument', 'Unknown request.');
-
-  // Only people the admin approved, and only for vectors they have access to.
-  const [user, meta, vec] = await Promise.all([db().collection('users').doc(uid).get(), db().collection('meta').doc('app').get(), db().collection('vectors').doc(String(d.vid || '')).get()]);
+  const [user, meta, vec] = await Promise.all([db().collection('users').doc(uid).get(), db().collection('meta').doc('app').get(), db().collection('vectors').doc(String(d.vid || '-')).get()]);
   if (!user.exists || !['admin', 'user'].includes(user.data().role)) throw new HttpsError('permission-denied', 'Your access is not approved yet.');
   if (!vec.exists) throw new HttpsError('not-found', 'The vector is not saved yet. Try again in a few seconds.');
   const v = vec.data(), superAdmin = meta.exists && meta.data().adminUid === uid;
   if (!superAdmin && !(v.acl || []).includes(uid)) throw new HttpsError('permission-denied', 'You have no access to this vector.');
+  return { uid, d, v };
+}
 
-  await countUse(uid);
-  const [company, direction, audience, topic] = await Promise.all([param(v.company), param(v.direction), param(v.audience), param(v.topic)]);
+// ai({ op, engine, vid, step, ui, letter, first, card }) -> a letter, or a review with a corrected letter.
+exports.ai = onCall({ secrets: [ANTHROPIC_API_KEY, OPENAI_API_KEY], timeoutSeconds: 120, memory: '256MiB' }, async (req) => {
+  const { uid, d, v } = await guard(req);
+  if (!['draft', 'polish', 'review'].includes(d.op) || !['claude', 'gpt'].includes(d.engine)) throw new HttpsError('invalid-argument', 'Unknown request.');
+
+  await countUse(uid, 'n', lib.LIMITS.perUserPerDay);
+  const [company, direction, audience, topic, shared] = await Promise.all([param(v.company), param(v.direction), param(v.audience), param(v.topic), db().collection('workspace').doc('shared').get()]);
+  // Library materials of this company (and the ones not tied to any company), most important first.
+  const docs = ((shared.exists && shared.data().docs) || []).filter((x) => !x.company || x.company === v.company).sort((a, b) => (a.priority || 9) - (b.priority || 9));
   const letter = d.letter || {}, first = d.first || {}, card = d.card || {};
-  const ctx = { op: d.op, engine: d.engine, step: Math.max(0, Math.min(4, +d.step || 0)), ui: d.ui === 'uk' ? 'uk' : 'en', company, direction, audience, topic, letter, first,
-    card: { title: card.title, notes: card.notes, type: card.type, jobTitle: card.jobTitle, company: card.company, who: card.who } };
+  const ctx = { op: d.op, engine: d.engine, step: Math.max(0, Math.min(4, +d.step || 0)), ui: d.ui === 'uk' ? 'uk' : 'en', company, direction, audience, topic, docs, letter, first,
+    card: { title: card.title, notes: card.notes, type: card.type, jobTitle: card.jobTitle, company: card.company, who: card.who, checkQ: card.checkQ } };
   if (d.op !== 'draft' && !String(letter.body || '').trim()) throw new HttpsError('invalid-argument', 'The letter is empty.');
   if (d.op === 'draft' && ctx.step > 0 && !String(first.body || '').trim()) throw new HttpsError('failed-precondition', 'Write the first letter of this variant before its reminders.');
 
@@ -51,5 +57,18 @@ exports.ai = onCall({ secrets: [ANTHROPIC_API_KEY, OPENAI_API_KEY], timeoutSecon
   } catch (e) {
     console.error('ai failed', d.op, d.engine, e.message);
     throw new HttpsError('internal', e.message.slice(0, 300));
+  }
+});
+
+// research({ vid, website, company, question }) -> { s: yes | no | nosite | err, ev, proj, url }.
+// Opens the company's own website (the home page and up to four pages about projects) and looks for the given words.
+exports.research = onCall({ secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 60, memory: '256MiB' }, async (req) => {
+  const { uid, d } = await guard(req);
+  await countUse(uid, 'r', lib.LIMITS.researchPerUserPerDay);
+  try {
+    return await lib.research(fetch, ANTHROPIC_API_KEY.value(), { website: d.website, company: d.company, question: d.question });
+  } catch (e) {
+    console.error('research failed', d.website, e.message);
+    return { s: 'err', ev: e.message.slice(0, 200), proj: '', url: '' };
   }
 });
