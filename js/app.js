@@ -503,7 +503,8 @@
     const camp = c.type === 'campaign', will = camp ? S.leads.filter((l) => l.cid === c.id && sendable(l)).length : 0;
     return `<div class="seqhead">${camp ? `<span class="sub small">${t('willGet')}: ${will}</span><button class="btn ghost sm" data-act="seqAuto" ${CLOUD && !ui.busy ? '' : 'disabled'} title="${CLOUD ? t('seqAutoHint') : t('aiDemoOnly')}">${ui.auto ? t('aiBusy') + ' ' + ui.auto : t('seqAuto')}</button>`
       : `<label class="fromf"><span>${t('fromMailbox')}</span>${from}</label>`}<span class="ty">${done} / ${list.length} ${t('approvedOf')}</span></div>
-      ${briefHint}${head2}${vtabs}${steps}${list.length < 5 ? `<button class="add" data-act="seqAdd">+ ${t('letter')} ${k}${list.length + 1} · ${t('addFollow')}</button>` : ''}<p class="sub small">${t('chainNote')} ${t('seqNote')}</p>`;
+      ${briefHint}${head2}${vtabs}${steps}${list.length < 5 ? `<button class="add" data-act="seqAdd">+ ${t('letter')} ${k}${list.length + 1} · ${t('addFollow')}</button>` : ''}<p class="sub small">${t('chainNote')} ${t('seqNote')}</p>
+      ${camp ? `<div class="acts"><span class="sub small">${vs.map((x) => { const st = x === 'A' ? seq.steps : seq.alt[x].steps, ok = st.filter((y) => y.status === 'approved').length; return `${t('variant')} ${x}: ${ok} / ${st.length} ${t('approvedOf')}`; }).join(' · ')}</span><span class="grow"></span><button class="btn sm" data-act="ctab" data-v="send">${t('tabSend')} →</button></div>` : ''}`;
   }
 
   function vCardModal() {
