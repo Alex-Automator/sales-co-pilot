@@ -333,16 +333,18 @@
     const all = S.leads.filter((l) => l.cid === c.id), q = ui.lq.trim().toLowerCase(), crit = critOf(c), rf = ui.rf || 'all';
     const list = all.filter((l) => !q || [leadName(l), l.f.company, l.f.email, l.f.jobTitle, (l.tags || []).join(' ')].join(' ').toLowerCase().includes(q))
       .filter((l) => rf === 'all' || (rf === 'off' ? l.off : rf === 'todo' ? !chkOf(l, crit) : (chkOf(l, crit) || {}).s === rf));
+    // Which variant of the letters each person gets (shown when the campaign has more than one).
+    const sq = seqOf(c), multi = varsOf(sq).length > 1, vmap = {}; if (multi) all.filter(sendable).forEach((l, n) => { vmap[l.id] = variantOf(sq, l, n); });
     const rows = list.slice(0, 200).map((l) => `<tr class="${l.off ? 'off' : ''}"><td>${esc(l.f.company || '')}</td><td>${esc([l.f.firstName, l.f.lastName].filter(Boolean).join(' ') || '—')}${l.f.jobTitle ? `<small class="ev">${esc(l.f.jobTitle)}</small>` : ''}</td>
       <td>${l.f.email ? esc(l.f.email) : `<input class="in mini" data-lemail="${l.id}" placeholder="${t('addEmail')}">`}</td>
-      <td class="wrapc">${chkCell(l, crit)}</td><td>${(l.tags || []).map((x) => `<span class="tagc">#${esc(x)}</span>`).join(' ')}</td>
+      ${multi ? `<td><b>${vmap[l.id] || '—'}</b></td>` : ''}<td class="wrapc">${chkCell(l, crit)}</td><td>${(l.tags || []).map((x) => `<span class="tagc">#${esc(x)}</span>`).join(' ')}</td>
       <td>${blockedWhy(l) ? `<span class="blk" title="${t(blockedWhy(l) === 'admin' ? 'blockedAdmin' : 'blockedTaken')}">${t('blockedBadge')}</span>` : l.card ? `<span class="ty">${t('hasCard')}</span>` : `<button class="link" data-act="leadCard" data-id="${l.id}">${t('toCard')}</button>`}</td>
       <td><button class="link" data-act="leadOff" data-id="${l.id}">${t(l.off ? 'leadOn' : 'leadOff')}</button> <button class="link" data-act="leadDel" data-id="${l.id}">×</button></td></tr>`).join('');
     if (!all.length) return `<p class="later">${t('noLeadsYet')}</p><div class="acts"><button class="btn sm" data-act="ctab" data-v="source">← ${t('tabSource')}</button></div>`;
     return `${vCriterion(c, all)}${ui.checkLeft ? `<p class="sub small">${t('checking')}: ${ui.checkLeft} ${t('left')}</p>` : ''}
       <div class="acts tight"><input class="in search" data-lq placeholder="${t('searchLeads')}" value="${esc(ui.lq)}"><span class="sub small">${Math.min(200, list.length)} ${t('shown')} ${t('ofTotal')} ${list.length}</span>
         <button class="btn ghost sm danger" data-act="leadClear">${ui.delArm ? t('delSure') : t('removeAll')}</button></div>
-      <table class="ltable"><tr><th>${t('company')}</th><th>${t('name')}</th><th>${t('email')}</th><th>${t('critCol')}</th><th>${t('tagsCol')}</th><th></th><th></th></tr>${rows}</table>`;
+      <table class="ltable"><tr><th>${t('company')}</th><th>${t('name')}</th><th>${t('email')}</th>${multi ? `<th>${t('variant')}</th>` : ''}<th>${t('critCol')}</th><th>${t('tagsCol')}</th><th></th><th></th></tr>${rows}</table>`;
   }
   // Step 1: where the recipients come from: a pasted table, a file, or companies that AI finds on the web.
   function vSource(c) {
@@ -467,12 +469,13 @@
     const seq = seqOf(c), v = S.vectors.find((x) => x.id === c.vid), co = v ? item('company', v.company) : null, mbs = myMailboxes(co);
     const from = mbs.length ? `<select class="in" data-seqfrom>${mbs.map((m) => `<option ${((seq.from || primaryMailbox(co)) === m.email) ? 'selected' : ''}>${esc(m.email)}</option>`).join('')}</select>` : `<span class="sub">${t('noMailbox')}</span>`;
     const list = stepsOf(c), vs = varsOf(seq), k = curVar(seq), nextV = ['B', 'C'].find((x) => !seq.alt[x]);
-    const cnt = {}; S.leads.filter((l) => l.cid === c.id && sendable(l)).forEach((l, n) => { const x = variantOf(seq, l, n); cnt[x] = (cnt[x] || 0) + 1; });
+    const cnt = {}, whoGets = {}; S.leads.filter((l) => l.cid === c.id && sendable(l)).forEach((l, n) => { const x = variantOf(seq, l, n); cnt[x] = (cnt[x] || 0) + 1; (whoGets[x] = whoGets[x] || []).push([l.f.firstName, l.f.lastName].filter(Boolean).join(' ') || l.f.email); });
     const vtabs = c.type !== 'campaign' ? '' : `<div class="vtabs">${vs.map((x) => `<button class="chip ${x === k ? 'on' : ''}" data-act="seqTab" data-v="${x}">${t('variant')} ${x} · ${cnt[x] || 0}</button>`).join('')}
         ${nextV ? `<button class="chip dash" data-act="seqTabAdd" title="${t('variantHint')}">+ ${t('variant')} ${nextV}</button>` : ''}${k !== 'A' ? `<button class="link small" data-act="seqTabDel">${t('removeVariant')} ${k}</button>` : ''}</div>
       ${vs.length < 2 ? '' : `<div class="row2 vset"><label class="fl"><span>${t('splitHow')}</span><select class="in" data-seqsplit><option value="even" ${seq.split !== 'role' ? 'selected' : ''}>${t('split_even')}</option><option value="role" ${seq.split === 'role' ? 'selected' : ''}>${t('split_role')}</option></select></label>
         ${seq.split === 'role' ? `<label class="fl"><span>${t('whoFor')} ${k}</span><input class="in" data-seqwho placeholder="CEO, Owner, Founder" value="${esc(whoOf(seq, k))}"></label>` : '<span></span>'}</div>
-        <p class="sub small">${t(seq.split === 'role' ? 'splitRoleNote' : 'splitEvenNote')}</p>`}`;
+        <p class="sub small">${t(seq.split === 'role' ? 'splitRoleNote' : 'splitEvenNote')}</p>
+        <p class="sub small"><b>${t('variant')} ${k}:</b> ${esc((whoGets[k] || []).slice(0, 12).join(', ') || '—')}${(whoGets[k] || []).length > 12 ? ` … +${whoGets[k].length - 12}` : ''}</p>`}`;
     const head2 = `<div class="row2 vset"><label class="fl"><span>${t('sendLang')}</span><select class="in" data-seqlang>${LANGS.map((l) => `<option value="${l}" ${seq.lang === l ? 'selected' : ''}>${esc(langName(l))}</option>`).join('')}</select></label><span></span></div>
       ${seq.lang !== 'en' ? `<p class="sub small">${t('langNote').replace('{l}', langName(seq.lang))}</p>` : ''}`;
     const done = list.filter((x) => x.status === 'approved').length, smp = Object.assign({}, sampleFor(c), { signature: tailOf(c, v, co, seq.from || primaryMailbox(co)) });
