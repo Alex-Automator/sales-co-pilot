@@ -297,64 +297,10 @@ async function mailToken(fetchFn, mailbox, scope) {
   if (!r.ok) throw new Error('Google Workspace refused access to ' + mailbox + ': ' + text.slice(0, 240));
   return JSON.parse(text).access_token;
 }
-const SEND = 'https://www.googleapis.com/auth/gmail.send', READ = 'https://www.googleapis.com/auth/gmail.readonly', GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me/';
-async function getJson(fetchFn, url, token) {
-  const r = await fetchFn(url, { headers: { authorization: 'Bearer ' + token } }), text = await r.text();
-  if (!r.ok) { const e = new Error(`gmail answered ${r.status}: ${text.slice(0, 240)}`); e.status = r.status; throw e; }
-  return JSON.parse(text);
-}
-// tokens: an optional cache { 'mailbox|scope': token } so one run asks Google once per mailbox.
-async function tokenFor(fetchFn, tokens, mailbox, scope) { const k = mailbox + '|' + scope; if (!tokens[k]) tokens[k] = await mailToken(fetchFn, mailbox, scope); return tokens[k]; }
-async function sendMail(fetchFn, mail, tokens) {
-  const token = await tokenFor(fetchFn, tokens || {}, mail.from, SEND);
-  const d = await post(fetchFn, GMAIL + 'messages/send', { authorization: 'Bearer ' + token }, Object.assign({ raw: rawMail(mail) }, mail.threadId ? { threadId: mail.threadId } : {}));
+async function sendMail(fetchFn, mail) {
+  const token = await mailToken(fetchFn, mail.from, 'https://www.googleapis.com/auth/gmail.send');
+  const d = await post(fetchFn, 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { authorization: 'Bearer ' + token }, { raw: rawMail(mail) });
   return { id: d.id, threadId: d.threadId };
 }
-// The Message-ID header of a sent letter: later letters of the chain refer to it so that mail programs keep them in one thread.
-async function messageId(fetchFn, tokens, mailbox, id) {
-  const d = await getJson(fetchFn, GMAIL + 'messages/' + id + '?format=metadata&metadataHeaders=Message-ID', await tokenFor(fetchFn, tokens, mailbox, READ));
-  return (((d.payload || {}).headers || []).find((h) => /^message-id$/i.test(h.name)) || {}).value || '';
-}
-// Has anyone answered in this thread? Returns 'replied', 'bounced' or ''.
-async function threadState(fetchFn, tokens, mailbox, threadId) {
-  const d = await getJson(fetchFn, GMAIL + 'threads/' + threadId + '?format=metadata&metadataHeaders=From', await tokenFor(fetchFn, tokens, mailbox, READ));
-  const froms = (d.messages || []).map((m) => ((((m.payload || {}).headers || []).find((h) => /^from$/i.test(h.name)) || {}).value || '').toLowerCase());
-  const other = froms.filter((f) => f && !f.includes(mailbox.toLowerCase()));
-  return other.some((f) => /mailer-daemon|postmaster/.test(f)) ? 'bounced' : other.length ? 'replied' : '';
-}
 
-// ---------- Campaign run: who gets which letter and when ----------
-const FAR = 9e15;
-const kept = (text, r) => String(text || '').replace(/[ \t]*\[\[([\s\S]*?)\]\]/g, (m, inner) => ((inner.match(/\{\{\s*\w+\s*\}\}/g) || []).every((x) => r[x.replace(/[{}\s]/g, '')]) ? ' ' + inner.trim() : '')).replace(/^ +/gm, '');
-const fill = (text, r) => kept(text, r).replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => (r[k] == null ? '' : String(r[k])));
-const wordsOf = (x) => String(x || '').toLowerCase().split(/[,;\n]/).map((w) => w.trim()).filter(Boolean);
-// Turns a campaign card and its recipients into ready letters with times. Nothing is sent here.
-function planRun({ card, leads, from, sig, foot, myName, start, gapMs }) {
-  const seq = card.seq || {}, alt = seq.alt || {}, vars = ['A'].concat(['B', 'C'].filter((k) => alt[k]));
-  const stepsOf = (k) => (k === 'A' ? seq.steps : alt[k].steps) || [], whoOf = (k) => (k === 'A' ? seq.whoA : alt[k].who) || '';
-  for (const k of vars) { const st = stepsOf(k); if (!st.length) throw new Error(`Variant ${k} has no letters`); st.forEach((x, i) => { if (x.status !== 'approved') throw new Error(`Letter ${k}${i + 1} is not approved yet`); if (!String(x.body || '').trim()) throw new Error(`Letter ${k}${i + 1} is empty`); }); }
-  const people = leads.filter((l) => l.f && l.f.email && !l.off && !l.blocked).sort((a, b) => (a.ord || 0) - (b.ord || 0));
-  const tail = [sig, foot].filter((x) => String(x || '').trim()).join('\n\n');
-  return people.map((l, n) => {
-    let k = 'A';
-    if (vars.length > 1) { if (seq.split === 'role') { const jt = String(l.f.jobTitle || '').toLowerCase(); k = vars.find((v) => wordsOf(whoOf(v)).some((w) => jt.includes(w))) || 'A'; } else k = vars[n % vars.length]; }
-    const r = Object.assign({}, l.f, { project: (l.chk && l.chk.s === 'yes' && l.chk.proj) || '', myName, signature: tail }), st = stepsOf(k);
-    const first = fill(st[0].subject, r).trim();
-    const steps = st.map((x, i) => { const body = /\{\{\s*signature\s*\}\}/.test(x.body) ? fill(x.body, r) : fill(x.body, r).replace(/\s+$/, '') + (tail ? '\n\n' + tail : '');
-      return { subject: fill(x.subject, r).trim() || (i ? 'Re: ' + first : first), body, due: start + i * gapMs }; });
-    return { lead: l.id, to: l.f.email, name: [l.f.firstName, l.f.lastName].filter(Boolean).join(' '), company: l.f.company || '', jobTitle: l.f.jobTitle || '', tags: l.tags || [], variant: k, from, steps };
-  });
-}
-// One step of one recipient's chain. Returns the fields to save.
-async function advance(fetchFn, tokens, d, now, watchEveryMs) {
-  if (d.status !== 'active') return { due: FAR };
-  if (d.i > 0 && d.threadId) { const st = await threadState(fetchFn, tokens, d.from, d.threadId); if (st) return { status: st, due: FAR, endedAt: now }; }
-  if (d.i >= d.steps.length) return now > d.watchUntil ? { status: 'done', due: FAR, endedAt: now } : { due: now + watchEveryMs };
-  const step = d.steps[d.i], sent = await sendMail(fetchFn, { from: d.from, to: d.to, subject: step.subject, body: step.body, threadId: d.threadId || undefined, replyTo: d.firstMsgId || undefined }, tokens);
-  const out = { i: d.i + 1, threadId: sent.threadId || d.threadId || '', sentAt: (d.sentAt || []).concat([now]), errs: 0, err: '' };
-  if (d.i === 0) out.firstMsgId = await messageId(fetchFn, tokens, d.from, sent.id).catch(() => '');
-  out.due = out.i < d.steps.length ? Math.max(d.steps[out.i].due, now + 60000) : now + watchEveryMs;
-  return out;
-}
-
-module.exports = { rawMail, sendMail, MAILER, planRun, advance, threadState, FAR, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };
+module.exports = { rawMail, sendMail, MAILER, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };

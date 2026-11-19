@@ -339,38 +339,16 @@
       <label class="fl"><span>${t('notes')}</span><textarea class="in" data-top="notes" rows="3">${esc(c.notes)}</textarea></label>
       <div class="acts"><span class="sub small">${t('tabRecipients')}: ${n}</span><span class="grow"></span><button class="btn sm" data-act="ctab" data-v="recipients" ${n ? '' : 'disabled'}>${t('tabRecipients')} →</button></div>`;
   }
-  // Asks the server how the run is going; keeps asking while letters are still due and the Sending step is open.
-  function runPoll(cid) {
-    clearTimeout(runPoll.t);
-    Cloud.fn('campaignStatus', { cardId: cid }, 30000).then((r) => {
-      ui.run = { cid, rows: r.rows || [], now: r.now, at: Date.now() }; render();
-      if ((r.rows || []).some((x) => x.status === 'active')) runPoll.t = setTimeout(() => { if (ui.open === cid && ui.ctab === 'send') runPoll(cid); }, 30000);
-    }, (e) => { ui.run = { cid, rows: [], err: String(e && e.message || e) }; render(); });
-  }
-  function vRun(c, go, okAll) {
-    const r = ui.run && ui.run.cid === c.id ? ui.run : null, rows = (r && r.rows) || [], live = rows.some((x) => x.status === 'active');
-    const time = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const table = rows.length ? `<table class="ltable"><tr><th>${t('email')}</th><th>${t('variant')}</th><th>${t('runSent')}</th><th>${t('runState')}</th><th>${t('runNext')}</th></tr>
-      ${rows.map((x) => `<tr><td>${esc(x.to)}</td><td>${esc(x.variant)}</td><td>${x.sent} / ${x.of}</td><td><span class="chk ${x.status === 'replied' ? 'yes' : x.status === 'error' || x.status === 'bounced' ? 'unsure' : ''}">${t('run_' + x.status)}</span>${x.err ? `<small class="ev" title="${esc(x.err)}">${esc(x.err)}</small>` : ''}</td><td>${x.next ? time(x.next) : ''}</td></tr>`).join('')}</table>` : '';
-    const why = !CLOUD ? t('aiDemoOnly') : go < 1 ? t('runNoOne') : go > 5 ? t('runTooMany') : !okAll ? t('runNotApproved') : '';
-    return `<div class="sitebox"><div class="bh">${t('runTitle')}</div><p class="sub small">${t('runNote')}</p>
-      <div class="acts tight"><label class="sub small">${t('runGap')} <input class="in nin" type="number" min="2" max="120" data-testgap value="${+c.testGap || 10}" ${live ? 'disabled' : ''}></label>
-        ${live ? `<button class="btn ghost sm" data-act="runStop">${t('stop')}</button>` : `<button class="btn sm" data-act="runStart" ${why || (r && r.busy) ? 'disabled' : ''}>${r && r.busy ? t('aiBusy') : t('runStart')}</button>`}
-        <button class="link small" data-act="runRefresh" ${CLOUD ? '' : 'disabled'}>${t('runRefresh')}</button></div>
-      ${why ? `<p class="sub small">${why}</p>` : ''}${r && r.err ? `<p class="sub small errc">${esc(r.err)}</p>` : ''}${table}${live ? `<p class="sub small">${t('runLive')}</p>` : ''}</div>`;
-  }
   // Step 4: from which mailbox, by which rules, and what is still missing before the start.
   function vSend(c) {
     const seq = seqOf(c), v = S.vectors.find((x) => x.id === c.vid), co = v ? item('company', v.company) : null, mbs = myMailboxes(co), s = S.send;
     const from = mbs.length ? `<select class="in" data-seqfrom>${mbs.map((m) => `<option ${((seq.from || primaryMailbox(co)) === m.email) ? 'selected' : ''}>${esc(m.email)}</option>`).join('')}</select>` : `<span class="sub">${t('noMailbox')}</span>`;
     const all = S.leads.filter((l) => l.cid === c.id), go = all.filter(sendable).length, crit = critOf(c), unchecked = crit ? all.filter((l) => !l.off && !chkOf(l, crit)).length : 0;
     const firsts = varsOf(seq).map((k) => (k === 'A' ? seq.steps : seq.alt[k].steps)[0]), okL = firsts.filter((x) => x.status === 'approved').length;
-    const okAll = varsOf(seq).every((k) => (k === 'A' ? seq.steps : seq.alt[k].steps).every((x) => x.status === 'approved'));
     const li = (ok, text) => `<li class="${ok ? 'ok' : ''}">${ok ? '✓' : '○'} ${text}</li>`;
     const sum = t('sendSum').replace('{start}', s.start).replace('{step}', s.step).replace('{cap}', s.cap).replace('{a}', s.gapMin).replace('{b}', s.gapMax);
     return `<label class="fl"><span>${t('fromMailbox')}</span>${from}</label>
       <button class="tog" data-act="cardOpt"><span class="sw ${optOn(c, v) ? 'on' : ''}"><i></i></span><span>${t('footOn')}<small>${optOf(v).text ? esc(optOf(v).text.split('\n').join(' · ')) : t('cardOptEmpty')}</small></span></button>
-      ${vRun(c, go, okAll)}
       <div class="sitebox"><div class="bh">${t('setSend')} · ${t('risk_' + s.level)}</div><p class="sub small">${sum}</p><button class="link small" data-act="sendOpen">${t('openRules')}</button></div>
       <div class="sitebox"><div class="bh">${t('readyTitle')}</div><ul class="ready">
         ${li(go > 0, `${t('readyWho')}: ${go}`)}${li(!unchecked, unchecked ? `${t('readyUnchecked')}: ${unchecked}` : t('readyChecked'))}
@@ -823,8 +801,7 @@
     moveCard(d) { const c = S.cards.find((x) => x.id === d.id), n = STAGES[stageIdx(c.stage) + +d.d]; if (n) { c.stage = n[0]; commit(); } },
     gotoStage(d) { const col = document.querySelector(`.col[data-stage="${d.stage}"]`); if (col) col.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' }); },
     wMove(d) { const i = S.widgets.indexOf(d.id), j = i + +d.d; if (i >= 0 && j >= 0 && j < S.widgets.length) { [S.widgets[i], S.widgets[j]] = [S.widgets[j], S.widgets[i]]; commit(); } },
-    ctab(d) { if (d.v === 'send' && CLOUD && cur() && cur().type === 'campaign') runPoll(ui.open);
-      ui.ctab = d.v; ui.imp = null; ui.prev = -1; ui.delArm = false; const c = cur(); if (d.v === 'recipients' && c && !critOf(c) && S.leads.some((l) => l.cid === c.id)) critSuggest(c.id); render(); },
+    ctab(d) { ui.ctab = d.v; ui.imp = null; ui.prev = -1; ui.delArm = false; const c = cur(); if (d.v === 'recipients' && c && !critOf(c) && S.leads.some((l) => l.cid === c.id)) critSuggest(c.id); render(); },
     leadImport() { const el = document.querySelector('[data-leadpaste]'); if (el && el.value.trim()) importLeads(cur(), el.value); },
     siteGo() { runCheck(ui.open); },
     siteStop() { if (ui.site) ui.site.stop = true; render(); },
@@ -883,14 +860,6 @@
     toneToggle(d) { const s = curParam().s; s.tones = s.tones || []; const i = s.tones.indexOf(d.v); if (i < 0) s.tones.push(d.v); else s.tones.splice(i, 1); commit(); },
     vecOpt() { const v = S.vectors.find((x) => x.id === ui.edit.id), o = optOf(v); v.opt = { on: !o.on, text: o.text || OPT_TEXT + '\n' + ((item('company', v.company) || {}).name || '') }; commit(); },
     cardOpt() { const c = cur(), v = S.vectors.find((x) => x.id === c.vid); c.optOut = !optOn(c, v); commit(); },
-    // Test run: the server sends the approved letters to at most five recipients, a few minutes apart.
-    runStart() {
-      const c = cur(); if (!CLOUD || (ui.run && ui.run.busy)) return;
-      ui.run = { cid: c.id, busy: true, rows: [] }; commit();
-      setTimeout(() => Cloud.fn('campaignStart', { cardId: c.id, gap: +c.testGap || 10 }).then(() => runPoll(c.id), (e) => { ui.run = { cid: c.id, err: String(e && e.message || e), rows: [] }; render(); }), 2000);
-    },
-    runStop() { const c = cur(); Cloud.fn('campaignStop', { cardId: c.id }).then(() => runPoll(c.id), (e) => { ui.err = String(e && e.message || e); ui.errAi = true; render(); }); },
-    runRefresh() { runPoll(ui.open); },
     mbFoot(d) {
       const it = curParam(), m = it.s.mailboxes[+d.i]; m.footOn = !m.footOn;
       if (m.footOn && !m.foot) m.foot = 'Not relevant? Reply "no" and I will not write again.\n' + it.name;
@@ -1059,7 +1028,6 @@
     if (el.dataset.crit && c) { const k = c.check = c.check || {}; if (el.dataset.crit === 'terms') k.terms = el.value.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean); else if (el.dataset.crit === 'tag') k.tag = el.value.trim().toLowerCase().replace(/^#/, '').replace(/[^a-z0-9а-яіїєґ]+/gi, '-'); else k.crit = el.value; save(); return; }
     if (el.hasAttribute('data-findq')) { ui.findq = el.value; return; }
     if (el.hasAttribute('data-vopt') && ui.edit) { const v = S.vectors.find((x) => x.id === ui.edit.id); v.opt = { on: true, text: el.value }; save(); return; }
-    if (el.hasAttribute('data-testgap') && c) { c.testGap = Math.max(2, Math.min(120, Math.round(+el.value) || 10)); save(); return; }
     if (el.hasAttribute('data-cmt') || el.dataset.lemail) return;
     if (el.hasAttribute('data-seqwho') && c) { const q = seqOf(c), k = curVar(q); if (k === 'A') q.whoA = el.value; else q.alt[k].who = el.value; save(); return; }
     if (el.dataset.seq && c) {

@@ -1,7 +1,6 @@
 // Server part of VECTOR. Runs in Cloud Functions for Firebase; the API keys live in Secret Manager
 // and never reach the browser or the repository.
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
-const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { setGlobalOptions } = require('firebase-functions/v2');
 const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
@@ -114,90 +113,5 @@ exports.mailTest = onCall({ timeoutSeconds: 60, memory: '256MiB' }, async (req) 
   } catch (e) {
     console.error('mailTest failed', box.email, e.message);
     throw new HttpsError('internal', e.message.slice(0, 400));
-  }
-});
-
-// ---------- Campaign run ----------
-const TEST_MAX = 5, WATCH_EVERY = 5 * 60000;
-
-// The caller must be approved and must have the campaign card.
-async function cardGuard(req) {
-  if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
-  const uid = req.auth.uid, d = req.data || {};
-  const [user, meta, card] = await Promise.all([db().collection('users').doc(uid).get(), db().collection('meta').doc('app').get(), db().collection('cards').doc(String(d.cardId || '-')).get()]);
-  if (!user.exists || !['admin', 'user'].includes(user.data().role)) throw new HttpsError('permission-denied', 'Your access is not approved yet.');
-  if (!card.exists) throw new HttpsError('not-found', 'The card is not saved yet. Try again in a few seconds.');
-  const superAdmin = meta.exists && meta.data().adminUid === uid;
-  if (!superAdmin && !(card.data().acl || []).includes(uid)) throw new HttpsError('permission-denied', 'You have no access to this card.');
-  return { uid, d, card: card.data(), superAdmin, user: user.data() };
-}
-const sendsOf = (cardId) => db().collection('sends').where('cid', '==', cardId).get();
-
-// campaignStart({ cardId, gap }) -> { total }. For now only a test run: at most five recipients, letters a few minutes apart.
-exports.campaignStart = onCall({ timeoutSeconds: 60, memory: '256MiB' }, async (req) => {
-  const { uid, d, card, superAdmin, user } = await cardGuard(req);
-  if (card.type !== 'campaign') throw new HttpsError('failed-precondition', 'This is not a campaign card.');
-  const [old, vec, leadSnap] = await Promise.all([sendsOf(d.cardId), db().collection('vectors').doc(String(card.vid)).get(), db().collection('leads').where('cid', '==', d.cardId).get()]);
-  if (old.docs.some((x) => x.data().status === 'active')) throw new HttpsError('failed-precondition', 'This campaign is already running. Stop it first.');
-  if (!vec.exists) throw new HttpsError('not-found', 'The vector of this card was not found.');
-  const v = vec.data(), co = await param(v.company), boxes = (co.s || {}).mailboxes || [];
-  const mine = boxes.filter((m) => superAdmin || m.owner === uid), want = (card.seq || {}).from;
-  const box = mine.find((m) => m.email === want) || mine.find((m) => m.primary) || mine[0];
-  if (!box) throw new HttpsError('failed-precondition', 'Add your mailbox in the company settings first.');
-  const leads = leadSnap.docs.map((x) => x.data()), optOn = card.optOut == null ? !!(v.opt && v.opt.on) : !!card.optOut;
-  const gapMin = Math.max(2, Math.min(120, Math.round(+d.gap) || 10)), now = Date.now();
-  let plan;
-  try { plan = lib.planRun({ card, leads, from: box.email, sig: box.sig || '', foot: optOn ? (v.opt && v.opt.text) || '' : '', myName: user.name || '', start: now, gapMs: gapMin * 60000 }); }
-  catch (e) { throw new HttpsError('failed-precondition', e.message); }
-  if (!plan.length) throw new HttpsError('failed-precondition', 'There is no recipient with an address.');
-  if (plan.length > TEST_MAX) throw new HttpsError('failed-precondition', `A test run takes at most ${TEST_MAX} recipients; this card has ${plan.length}. Leave the others out or make a separate test card.`);
-  await countUse(uid, 'm', 30);
-  const batch = db().batch();
-  old.docs.forEach((x) => batch.delete(x.ref));
-  plan.forEach((p) => batch.set(db().collection('sends').doc(`${d.cardId}_${p.lead}`), Object.assign(p, { cid: d.cardId, vid: card.vid, cardTitle: card.title || '', cardVec: card.vec || {}, acl: card.acl || [], owner: uid,
-    status: 'active', i: 0, due: now, test: true, startedAt: now, watchUntil: now + p.steps.length * gapMin * 60000 + 3 * 3600000, errs: 0 })));
-  await batch.commit();
-  return { total: plan.length, from: box.email, gap: gapMin };
-});
-
-// campaignStatus({ cardId }) -> { rows } for the progress table.
-exports.campaignStatus = onCall({ timeoutSeconds: 30, memory: '256MiB' }, async (req) => {
-  const { d } = await cardGuard(req);
-  const snap = await sendsOf(d.cardId);
-  return { now: Date.now(), rows: snap.docs.map((x) => x.data()).map((x) => ({ to: x.to, name: x.name, variant: x.variant, sent: x.i, of: x.steps.length, status: x.status, next: x.status === 'active' && x.i < x.steps.length ? x.due : 0, err: x.err || '', from: x.from })) };
-});
-
-// campaignStop({ cardId }) -> { stopped }.
-exports.campaignStop = onCall({ timeoutSeconds: 30, memory: '256MiB' }, async (req) => {
-  const { d } = await cardGuard(req);
-  const snap = await sendsOf(d.cardId), batch = db().batch(); let n = 0;
-  snap.docs.forEach((x) => { if (x.data().status === 'active') { batch.update(x.ref, { status: 'stopped', due: lib.FAR, endedAt: Date.now() }); n++; } });
-  await batch.commit();
-  return { stopped: n };
-});
-
-// A reply turns the recipient into a contact card on the board, in the Replied column, linked to its campaign.
-async function replyCard(d, ref) {
-  const id = 'k' + ref.id.replace(/[^a-zA-Z0-9]/g, '').slice(-14) + Date.now().toString(36);
-  await db().collection('cards').doc(id).set({ id, vid: d.vid, owner: d.owner, acl: d.acl || [], ord: Date.now(), type: 'contact', stage: 'replied', title: d.name || d.company || d.to, vec: d.cardVec || {}, parent: d.cid,
-    f: { jobTitle: d.jobTitle || '', company: d.company || '', email: d.to, phone: '', linkedin: '' }, next: { text: 'Answer the reply', date: new Date().toISOString().slice(0, 10) }, awaiting: true,
-    auto: { follow: false, reply: false, notify: true, draft: true }, notes: `Replied to the campaign "${d.cardTitle}" (variant ${d.variant}, after letter ${d.i}).`, photo: '', blocked: '', okEmail: d.to, tags: d.tags || [] });
-  await db().collection('leads').doc(d.lead).set({ card: id, replied: true }, { merge: true }).catch(() => {});
-}
-
-// Every two minutes: send what is due, look for replies, stop chains that got one.
-exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, memory: '256MiB' }, async () => {
-  const now = Date.now(), snap = await db().collection('sends').where('due', '<=', now).orderBy('due').limit(25).get(), tokens = {};
-  for (const doc of snap.docs) {
-    const d = doc.data();
-    try {
-      const out = await lib.advance(fetch, tokens, d, Date.now(), WATCH_EVERY);
-      await doc.ref.update(out);
-      if (out.status === 'replied') await replyCard(d, doc.ref);
-    } catch (e) {
-      console.error('send failed', doc.id, e.message);
-      const errs = (d.errs || 0) + 1;
-      await doc.ref.update(errs >= 3 ? { status: 'error', due: lib.FAR, errs, err: e.message.slice(0, 300) } : { due: Date.now() + 3 * 60000, errs, err: e.message.slice(0, 300) });
-    }
   }
 });

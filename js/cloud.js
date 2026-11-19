@@ -110,7 +110,6 @@ const Cloud = (function () {
     ai(payload) { return firebase.app().functions('europe-west1').httpsCallable('ai', { timeout: 130000 })(payload).then((r) => r.data); },
     // Asks the server to open a company's website and look for the given words.
     research(payload) { return firebase.app().functions('europe-west1').httpsCallable('research', { timeout: 250000 })(payload).then((r) => r.data); },
-    fn(name, payload, ms) { return firebase.app().functions('europe-west1').httpsCallable(name, { timeout: ms || 70000 })(payload).then((r) => r.data); },
     mailTest(payload) { return firebase.app().functions('europe-west1').httpsCallable('mailTest', { timeout: 70000 })(payload).then((r) => r.data); },
     criterion(payload) { return firebase.app().functions('europe-west1').httpsCallable('criterion', { timeout: 70000 })(payload).then((r) => r.data); },
     find(payload) { return firebase.app().functions('europe-west1').httpsCallable('find', { timeout: 310000 })(payload).then((r) => r.data); },
