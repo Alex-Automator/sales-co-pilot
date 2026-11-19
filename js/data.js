@@ -18,7 +18,7 @@ function defaultLegend() {
   ];
 }
 function defaultUser() { return { name: 'Demo Operator', email: 'operator@example.com', photo: '' }; }
-const VERSION = '0.1';
+const VERSION = '0.2';
 const WIDGETS = ['analytics', 'calendar', 'important', 'mail'];
 const DOC_TYPES = ['offer', 'framework', 'addendum', 'invoice'];
 const DOC_STAGES = ['proposal', 'negotiation', 'signed'];

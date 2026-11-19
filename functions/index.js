@@ -40,16 +40,17 @@ async function guard(req) {
 // ai({ op, engine, vid, step, ui, letter, first, card }) -> a letter, or a review with a corrected letter.
 exports.ai = onCall({ secrets: [ANTHROPIC_API_KEY, OPENAI_API_KEY], timeoutSeconds: 120, memory: '256MiB' }, async (req) => {
   const { uid, d, v } = await guard(req);
-  if (!['draft', 'polish', 'review'].includes(d.op) || !['claude', 'gpt'].includes(d.engine)) throw new HttpsError('invalid-argument', 'Unknown request.');
+  if (!['draft', 'polish', 'review', 'revise'].includes(d.op) || !['claude', 'gpt'].includes(d.engine)) throw new HttpsError('invalid-argument', 'Unknown request.');
 
   await countUse(uid, 'n', lib.LIMITS.perUserPerDay);
   const [company, direction, audience, topic, shared] = await Promise.all([param(v.company), param(v.direction), param(v.audience), param(v.topic), db().collection('workspace').doc('shared').get()]);
   // Library materials of this company (and the ones not tied to any company), most important first.
   const docs = ((shared.exists && shared.data().docs) || []).filter((x) => !x.company || x.company === v.company).sort((a, b) => (a.priority || 9) - (b.priority || 9));
   const letter = d.letter || {}, first = d.first || {}, card = d.card || {};
-  const ctx = { op: d.op, engine: d.engine, step: Math.max(0, Math.min(4, +d.step || 0)), ui: d.ui === 'uk' ? 'uk' : 'en', company, direction, audience, topic, docs, letter, first,
+  const ctx = { op: d.op, engine: d.engine, comment: d.comment, step: Math.max(0, Math.min(4, +d.step || 0)), ui: d.ui === 'uk' ? 'uk' : 'en', company, direction, audience, topic, docs, letter, first,
     card: { title: card.title, notes: card.notes, type: card.type, jobTitle: card.jobTitle, company: card.company, who: card.who, checkQ: card.checkQ } };
   if (d.op !== 'draft' && !String(letter.body || '').trim()) throw new HttpsError('invalid-argument', 'The letter is empty.');
+  if (d.op === 'revise' && !String(d.comment || '').trim()) throw new HttpsError('invalid-argument', 'Write a comment first.');
   if (d.op === 'draft' && ctx.step > 0 && !String(first.body || '').trim()) throw new HttpsError('failed-precondition', 'Write the first letter of this variant before its reminders.');
 
   try {
@@ -60,15 +61,33 @@ exports.ai = onCall({ secrets: [ANTHROPIC_API_KEY, OPENAI_API_KEY], timeoutSecon
   }
 });
 
-// research({ vid, website, company, question }) -> { s: yes | no | nosite | err, ev, proj, url }.
-// Opens the company's own website (the home page and up to four pages about projects) and looks for the given words.
-exports.research = onCall({ secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 60, memory: '256MiB' }, async (req) => {
+const vectorCtx = async (v) => { const [company, direction, audience, topic] = await Promise.all([param(v.company), param(v.direction), param(v.audience), param(v.topic)]); return { company, direction, audience, topic }; };
+
+// criterion({ vid }) -> { criterion, tag, terms }: what must be true of a company, taken from the topic brief.
+exports.criterion = onCall({ secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 60, memory: '256MiB' }, async (req) => {
+  const { uid, v } = await guard(req);
+  await countUse(uid, 'n', lib.LIMITS.perUserPerDay);
+  try { return await lib.criterion(fetch, ANTHROPIC_API_KEY.value(), Object.assign(await vectorCtx(v), { card: {} })); }
+  catch (e) { console.error('criterion failed', e.message); throw new HttpsError('internal', e.message.slice(0, 300)); }
+});
+
+// research({ vid, website, company, criterion, terms }) -> { s: yes | no | unsure, ev, proj, url, by }.
+exports.research = onCall({ secrets: [ANTHROPIC_API_KEY, OPENAI_API_KEY], timeoutSeconds: 240, memory: '256MiB' }, async (req) => {
   const { uid, d } = await guard(req);
   await countUse(uid, 'r', lib.LIMITS.researchPerUserPerDay);
   try {
-    return await lib.research(fetch, ANTHROPIC_API_KEY.value(), { website: d.website, company: d.company, question: d.question });
+    return await lib.research(fetch, { claude: ANTHROPIC_API_KEY.value(), gpt: OPENAI_API_KEY.value() }, { website: d.website, company: d.company, criterion: d.criterion, terms: d.terms });
   } catch (e) {
     console.error('research failed', d.website, e.message);
-    return { s: 'err', ev: e.message.slice(0, 200), proj: '', url: '' };
+    return { s: 'unsure', ev: ('The check failed: ' + e.message).slice(0, 240), proj: '', url: '', by: '' };
   }
+});
+
+// find({ vid, request, n, skip }) -> { companies: [{ company, website, country, why, emails }] }.
+exports.find = onCall({ secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 300, memory: '256MiB' }, async (req) => {
+  const { uid, d, v } = await guard(req);
+  if (!String(d.request || '').trim()) throw new HttpsError('invalid-argument', 'Describe which companies to look for.');
+  await countUse(uid, 'f', 20);
+  try { return await lib.find(fetch, { claude: ANTHROPIC_API_KEY.value() }, Object.assign(await vectorCtx(v), { card: {}, request: d.request, n: d.n, skip: Array.isArray(d.skip) ? d.skip.slice(0, 200) : [] })); }
+  catch (e) { console.error('find failed', e.message); throw new HttpsError('internal', e.message.slice(0, 300)); }
 });

@@ -235,48 +235,119 @@
   // ---------- recipients of a campaign ----------
   const leadName = (l) => [l.f.firstName, l.f.lastName].filter(Boolean).join(' ') || l.f.email;
   const hostOf = (w) => String(w || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split(/[/?#]/)[0];
-  // Website check: one request per company website, at most three at a time; the answer is written to every recipient of that company.
-  function siteCheck(cid) {
-    const c = S.cards.find((x) => x.id === cid), q = ((c && c.check) || {}).q || ''; if (!c || !q.trim() || ui.site) return;
-    const mine = () => S.leads.filter((l) => l.cid === cid), fresh = (l) => l.chk && l.chk.q === q && l.chk.s !== 'err';
-    const queue = [], seen = {};
-    mine().forEach((l) => { const h = hostOf(l.f.website); if (!h) { if (!fresh(l)) l.chk = { s: 'nosite', q }; return; } if (!fresh(l) && !seen[h]) { seen[h] = 1; queue.push({ h, website: l.f.website, company: l.f.company || '' }); } });
-    ui.site = { total: queue.length, done: 0, stop: false }; commit();
+  const coKey = (l) => hostOf(l.f.website) || (l.f.company ? 'name:' + l.f.company.trim().toLowerCase() : '');
+  const critOf = (c) => ((c && c.check) || {}).crit || '';
+  const chkOf = (l, crit) => (l.chk && crit && l.chk.c === crit ? l.chk : null);
+  const sendable = (l) => !!l.f.email && !blockedWhy(l) && !l.off;
+  // The criterion comes from the topic brief: AI proposes it once, the user confirms or edits it.
+  function critSuggest(cid) {
+    const c = S.cards.find((x) => x.id === cid); if (!c || !CLOUD || ui.critBusy) return;
+    ui.critBusy = true; render();
+    Cloud.criterion({ vid: c.vid }).then((r) => { ui.critBusy = false; const c2 = S.cards.find((x) => x.id === cid); if (c2 && !critOf(c2)) c2.check = { crit: r.criterion || '', tag: r.tag || '', terms: r.terms || [] }; commit(); })
+      .catch((e) => { ui.critBusy = false; ui.err = String(e && e.message || e); ui.errAi = true; render(); });
+  }
+  const setTag = (l, tag, on) => { if (!tag) return; const s = (l.tags || []).filter((x) => x !== tag); if (on) s.push(tag); l.tags = s; };
+  // The check: one request per company, three at a time. What is already known about a company from another campaign is reused.
+  function runCheck(cid) {
+    const c = S.cards.find((x) => x.id === cid), k = (c && c.check) || {}, crit = k.crit || ''; if (!c || !crit.trim() || ui.site) return;
+    const mine = () => S.leads.filter((l) => l.cid === cid), queue = [], seen = {};
+    const known = {}; S.leads.forEach((l) => { const x = chkOf(l, crit); if (x && l.cid !== cid && (x.s === 'yes' || x.s === 'no')) known[coKey(l)] = x; });
+    const put = (key, r) => mine().forEach((l) => { if (coKey(l) === key) { l.chk = { s: r.s, ev: r.ev || '', proj: r.proj || '', url: r.url || '', by: r.by || '', c: crit }; setTag(l, k.tag, r.s === 'yes'); } });
+    mine().forEach((l) => { const key = coKey(l); if (!key || seen[key]) return; const x = chkOf(l, crit); if (x && !/failed|search:/i.test(x.ev || '')) return; seen[key] = 1;
+      if (known[key]) put(key, known[key]); else queue.push({ key, website: l.f.website || '', company: l.f.company || '' }); });
+    ui.site = { total: queue.length, done: 0, stop: false, live: Math.min(3, queue.length) || 1 }; commit();
     const next = () => {
       const job = queue.shift(); if (!job || ui.site.stop) { if (!--ui.site.live) { ui.site = null; commit(); } return; }
-      Cloud.research({ vid: c.vid, website: job.website, company: job.company, question: q }).catch((e) => { const m = String(e && e.message || e); if (/limit|access|approved|Sign in/i.test(m)) { ui.site.stop = true; ui.err = m; ui.errAi = true; } return { s: 'err', ev: m }; })
-        .then((r) => { mine().forEach((l) => { if (hostOf(l.f.website) === job.h) l.chk = { s: r.s, ev: r.ev || '', proj: r.proj || '', url: r.url || '', q }; }); ui.site.done++; commit(); next(); });
+      Cloud.research({ vid: c.vid, website: job.website, company: job.company, criterion: crit, terms: k.terms || [] })
+        .catch((e) => { const m = String(e && e.message || e); if (/limit|access|approved|Sign in/i.test(m)) { ui.site.stop = true; ui.err = m; ui.errAi = true; } return { s: 'unsure', ev: 'The check failed: ' + m }; })
+        .then((r) => { put(job.key, r); ui.site.done++; commit(); next(); });
     };
-    ui.site.live = Math.min(3, queue.length) || 1; for (let i = 0; i < ui.site.live; i++) next();
+    for (let i = 0, n = ui.site.live; i < n; i++) next();
   }
-  function vSiteCheck(c, all) {
-    if (c.type !== 'campaign' || !all.length) return '';
-    const q = (c.check || {}).q || '', n = { yes: 0, no: 0, nosite: 0, err: 0 }; let off = 0, todo = 0;
-    all.forEach((l) => { if (l.off) off++; if (l.chk && l.chk.q === q) n[l.chk.s]++; else todo++; });
-    const checked = all.length - todo, toDrop = all.filter((l) => !l.off && l.chk && l.chk.q === q && (l.chk.s === 'no' || l.chk.s === 'nosite')).length;
-    return `<div class="sitebox"><div class="bh">${t('siteTitle')}</div><p class="sub small">${t('siteNote')}</p>
-      <div class="acts tight"><input class="in grow" data-chkq placeholder="data center, data centre, mission critical" value="${esc(q)}" ${ui.site ? 'disabled' : ''}>
-        ${ui.site ? `<span class="sub small">${t('siteRun')} ${ui.site.done} / ${ui.site.total}</span><button class="btn ghost sm" data-act="siteStop">${t('stop')}</button>`
-        : `<button class="btn sm" data-act="siteGo" ${CLOUD && q.trim() ? '' : 'disabled'} title="${CLOUD ? '' : t('aiDemoOnly')}">${t(todo || n.err ? 'siteGo' : 'siteAgain')}</button>`}</div>
-      ${checked ? `<p class="sitesum"><span class="ok">${t('site_yes')}: ${n.yes}</span><span>${t('site_no')}: ${n.no}</span><span>${t('site_nosite')}: ${n.nosite}</span>${n.err ? `<span>${t('site_err')}: ${n.err}</span>` : ''}${off ? `<span>${t('siteOff')}: ${off}</span>` : ''}</p>
-        <div class="acts tight">${toDrop && !ui.site ? `<button class="btn ghost sm" data-act="siteDrop">${t('siteDrop')} (${toDrop})</button>` : ''}${off ? `<button class="link small" data-act="siteBack">${t('siteBack')}</button>` : ''}</div>` : ''}</div>`;
+  // Asks the server for one letter. The answer may arrive after the data was refreshed from the cloud, so the letter is found again by its ids.
+  function aiRun(cid, k, i, op, eng, comment) {
+    const c = S.cards.find((x) => x.id === cid), q = seqOf(c), list = k === 'A' ? q.steps : q.alt[k].steps, st = list[i], f = c.f || {};
+    if (ui.busy || !CLOUD) return Promise.reject(new Error('busy'));
+    if (op === 'revise' && !String(comment).trim()) { ui.err = t('cmtEmpty'); ui.errAi = true; render(); return Promise.reject(new Error('empty')); }
+    ui.busy = `${i}|${op}|${eng}`; render();
+    const find = () => { const c2 = S.cards.find((x) => x.id === cid), q2 = c2 && c2.seq; if (!q2) return null; return (k === 'A' ? q2.steps : (q2.alt[k] || {}).steps || []).find((x) => x.id === st.id); };
+    return Cloud.ai({ op, engine: eng, comment, vid: c.vid, step: i, ui: S.lang, letter: { subject: st.subject, body: st.body }, first: { subject: list[0].subject, body: list[0].body },
+      card: { title: c.title, notes: c.notes || '', type: c.type, jobTitle: f.jobTitle || '', company: f.company || '', who: varsOf(q).length > 1 && q.split === 'role' ? whoOf(q, k) : '',
+        checkQ: S.leads.some((l) => l.cid === cid && (chkOf(l, critOf(c)) || {}).s === 'yes') ? critOf(c) : '' } })
+      .then((r) => {
+        ui.busy = ''; const s2 = find(); if (!s2) { render(); return; }
+        if (op === 'review') { s2.review = { ok: !!r.ok, issues: r.issues || [], subject: r.subject || '', body: r.body || '', by: r.engine }; if (r.ok && s2.status === 'draft') s2.status = 'reviewed'; }
+        else { s2.subject = i > 0 ? (op === 'draft' ? '' : s2.subject) : r.subject || s2.subject; s2.body = r.body; s2.status = 'draft'; s2.by = r.engine; s2.review = null; }
+        commit();
+      }, (e) => { ui.busy = ''; ui.err = String(e && e.message ? e.message : e); ui.errAi = true; render(); throw e; });
   }
-  const chkCell = (l, q) => { const k = l.chk && l.chk.q === q ? l.chk : null; if (!k) return ''; const tip = esc([k.ev, k.url].filter(Boolean).join(' · '));
-    return k.s === 'yes' ? `<span class="chk yes" title="${tip}">✓ ${esc(k.proj || t('site_yes'))}</span>` : `<span class="chk" title="${tip}">${t('site_' + k.s)}</span>`; };
+  function vCriterion(c, all) {
+    const k = c.check || {}, crit = k.crit || '';
+    const n = { yes: 0, unsure: 0, no: 0 }; let todo = 0, off = 0;
+    all.forEach((l) => { if (l.off) off++; const x = chkOf(l, crit); if (x) n[x.s] = (n[x.s] || 0) + 1; else todo++; });
+    const noIn = all.filter((l) => !l.off && (chkOf(l, crit) || {}).s === 'no').length;
+    const cos = Object.keys(all.reduce((m, l) => { if (!chkOf(l, crit) && coKey(l)) m[coKey(l)] = 1; return m; }, {})).length;
+    const chip = (v, label, cnt) => `<button class="chip ${ui.rf === v ? 'on' : ''}" data-act="rf" data-v="${v}">${label} · ${cnt}</button>`;
+    return `<div class="sitebox"><div class="bh">${t('critTitle')}</div><p class="sub small">${t('critNote')}</p>
+      ${!crit && ui.critBusy ? `<p class="sub">${t('critBusy')}</p>` : `<label class="fl"><span>${t('critLabel')}</span><input class="in" data-crit="crit" value="${esc(crit)}" placeholder="${t('critPh')}" ${ui.site ? 'disabled' : ''}></label>
+      <div class="row2"><label class="fl"><span>${t('critTag')}</span><input class="in" data-crit="tag" value="${esc(k.tag || '')}" placeholder="data-center" ${ui.site ? 'disabled' : ''}></label>
+        <label class="fl"><span>${t('critTerms')}</span><input class="in" data-crit="terms" value="${esc((k.terms || []).join(', '))}" ${ui.site ? 'disabled' : ''}></label></div>
+      <div class="acts tight">${ui.site ? `<span class="sub small">${t('siteRun')} ${ui.site.done} / ${ui.site.total}</span><button class="btn ghost sm" data-act="siteStop">${t('stop')}</button>`
+        : `<button class="btn sm" data-act="siteGo" ${CLOUD && crit.trim() && all.length ? '' : 'disabled'} title="${CLOUD ? '' : t('aiDemoOnly')}">${t(todo ? 'siteGo' : 'siteAgain')}${todo ? ` (${todo})` : ''}</button>
+          <button class="link small" data-act="critAgain" ${CLOUD ? '' : 'disabled'}>${t('critAgain')}</button>`}</div>
+      ${todo && !ui.site ? `<p class="sub small">${t('critCost').replace('{n}', cos).replace('{usd}', Math.max(1, Math.ceil(cos * 0.05)))}</p>` : ''}`}
+      ${all.length ? `<div class="vtabs rfs">${chip('all', t('all'), all.length)}${chip('yes', t('site_yes'), n.yes)}${chip('unsure', t('site_unsure'), n.unsure)}${chip('no', t('site_no'), n.no)}${todo ? chip('todo', t('site_todo'), todo) : ''}${off ? chip('off', t('siteOff'), off) : ''}</div>
+        <div class="acts tight">${noIn && !ui.site ? `<button class="btn ghost sm" data-act="siteDrop">${t('siteDrop')} (${noIn})</button>` : ''}${off ? `<button class="link small" data-act="siteBack">${t('siteBack')}</button>` : ''}
+          <span class="grow"></span><button class="btn sm" data-act="listOk">${t('listOk')} →</button></div>` : ''}</div>`;
+  }
+  const chkCell = (l, crit) => { const x = chkOf(l, crit); if (!x) return '';
+    return `<span class="chk ${x.s}">${x.s === 'yes' ? '✓ ' + esc(x.proj || t('site_yes')) : t('site_' + x.s)}</span>${x.ev ? `<small class="ev" title="${esc(x.ev)}">${esc(x.ev)}</small>` : ''}${x.url ? ` <a class="link small" href="${esc(x.url)}" target="_blank" rel="noopener">${t('source')}</a>` : ''}`; };
   function vRecipients(c) {
-    const all = S.leads.filter((l) => l.cid === c.id), q = ui.lq.trim().toLowerCase(), cq = (c.check || {}).q || '';
-    const list = all.filter((l) => !q || [leadName(l), l.f.company, l.f.email, l.f.jobTitle].join(' ').toLowerCase().includes(q));
-    const rows = list.slice(0, 200).map((l) => `<tr class="${l.off ? 'off' : ''}"><td>${esc(leadName(l))}</td><td>${esc(l.f.jobTitle || '')}</td><td>${esc(l.f.company || '')}</td><td>${esc(l.f.email)}</td>
-      <td>${chkCell(l, cq)}${l.off ? ` <button class="link" data-act="leadOn" data-id="${l.id}">${t('leadOn')}</button>` : ''}</td>
+    const all = S.leads.filter((l) => l.cid === c.id), q = ui.lq.trim().toLowerCase(), crit = critOf(c), rf = ui.rf || 'all';
+    const list = all.filter((l) => !q || [leadName(l), l.f.company, l.f.email, l.f.jobTitle, (l.tags || []).join(' ')].join(' ').toLowerCase().includes(q))
+      .filter((l) => rf === 'all' || (rf === 'off' ? l.off : rf === 'todo' ? !chkOf(l, crit) : (chkOf(l, crit) || {}).s === rf));
+    const rows = list.slice(0, 200).map((l) => `<tr class="${l.off ? 'off' : ''}"><td>${esc(l.f.company || '')}</td><td>${esc([l.f.firstName, l.f.lastName].filter(Boolean).join(' ') || '—')}${l.f.jobTitle ? `<small class="ev">${esc(l.f.jobTitle)}</small>` : ''}</td>
+      <td>${l.f.email ? esc(l.f.email) : `<input class="in mini" data-lemail="${l.id}" placeholder="${t('addEmail')}">`}</td>
+      <td class="wrapc">${chkCell(l, crit)}</td><td>${(l.tags || []).map((x) => `<span class="tagc">#${esc(x)}</span>`).join(' ')}</td>
       <td>${blockedWhy(l) ? `<span class="blk" title="${t(blockedWhy(l) === 'admin' ? 'blockedAdmin' : 'blockedTaken')}">${t('blockedBadge')}</span>` : l.card ? `<span class="ty">${t('hasCard')}</span>` : `<button class="link" data-act="leadCard" data-id="${l.id}">${t('toCard')}</button>`}</td>
-      <td><button class="link" data-act="leadDel" data-id="${l.id}">×</button></td></tr>`).join('');
-    const imp = ui.imp ? `<p class="hint">${ui.imp.err ? t(ui.imp.err) : `${ui.imp.added} ${t('impAdded')} · ${ui.imp.dup} ${t('impDup')} · ${ui.imp.bad} ${t('impBad')}`}</p>` : '';
-    return `<textarea class="in" rows="4" data-leadpaste placeholder="${t('pasteHint')}"></textarea>
-      <div class="acts tight"><button class="btn sm" data-act="leadImport">${t('importBtn')}</button><label class="btn ghost sm filebtn">${t('uploadCsv')}<input type="file" accept=".csv,.tsv,.txt,text/csv" data-leadfile hidden></label></div>
-      <p class="sub small">${t('sheetLater')}</p>${imp}${ui.checkLeft ? `<p class="sub small">${t('checking')}: ${ui.checkLeft} ${t('left')}</p>` : ''}
-      ${vSiteCheck(c, all)}${all.length ? `<div class="acts tight"><input class="in search" data-lq placeholder="${t('searchLeads')}" value="${esc(ui.lq)}"><span class="sub small">${Math.min(200, list.length)} ${t('shown')} ${t('ofTotal')} ${all.length}</span>
+      <td><button class="link" data-act="leadOff" data-id="${l.id}">${t(l.off ? 'leadOn' : 'leadOff')}</button> <button class="link" data-act="leadDel" data-id="${l.id}">×</button></td></tr>`).join('');
+    if (!all.length) return `<p class="later">${t('noLeadsYet')}</p><div class="acts"><button class="btn sm" data-act="ctab" data-v="source">← ${t('tabSource')}</button></div>`;
+    return `${vCriterion(c, all)}${ui.checkLeft ? `<p class="sub small">${t('checking')}: ${ui.checkLeft} ${t('left')}</p>` : ''}
+      <div class="acts tight"><input class="in search" data-lq placeholder="${t('searchLeads')}" value="${esc(ui.lq)}"><span class="sub small">${Math.min(200, list.length)} ${t('shown')} ${t('ofTotal')} ${list.length}</span>
         <button class="btn ghost sm danger" data-act="leadClear">${ui.delArm ? t('delSure') : t('removeAll')}</button></div>
-      <table class="ltable"><tr><th>${t('name')}</th><th>${t('jobTitle')}</th><th>${t('company')}</th><th>${t('email')}</th><th>${t('siteCol')}</th><th></th><th></th></tr>${rows}</table>` : ''}`;
+      <table class="ltable"><tr><th>${t('company')}</th><th>${t('name')}</th><th>${t('email')}</th><th>${t('critCol')}</th><th>${t('tagsCol')}</th><th></th><th></th></tr>${rows}</table>`;
+  }
+  // Step 1: where the recipients come from: a pasted table, a file, or companies that AI finds on the web.
+  function vSource(c) {
+    const n = S.leads.filter((l) => l.cid === c.id).length;
+    const imp = ui.imp ? `<p class="hint">${ui.imp.err ? t(ui.imp.err) : `${ui.imp.added} ${t('impAdded')} · ${ui.imp.dup} ${t('impDup')} · ${ui.imp.bad} ${t('impBad')}`}</p>` : '';
+    const fnd = ui.found ? `<p class="hint">${ui.found.err ? esc(ui.found.err) : `${t('foundCo')}: ${ui.found.co} · ${t('foundMail')}: ${ui.found.mail}`}</p>` : '';
+    return `<label class="fl"><span>${t('title')}</span><input class="in big" data-top="title" value="${esc(c.title)}"></label>
+      <div class="sitebox"><div class="bh">${t('srcTable')}</div>
+        <textarea class="in" rows="4" data-leadpaste placeholder="${t('pasteHint')}"></textarea>
+        <div class="acts tight"><button class="btn sm" data-act="leadImport">${t('importBtn')}</button><label class="btn ghost sm filebtn">${t('uploadCsv')}<input type="file" accept=".csv,.tsv,.txt,text/csv" data-leadfile hidden></label></div>
+        <p class="sub small">${t('sheetLater')}</p>${imp}</div>
+      <div class="sitebox"><div class="bh">${t('srcFind')}</div><p class="sub small">${t('srcFindNote')}</p>
+        <textarea class="in" rows="2" data-findq placeholder="${t('srcFindPh')}">${esc(ui.findq || '')}</textarea>
+        <div class="acts tight"><select class="in nin" data-findn>${[5, 10, 15].map((x) => `<option ${+(ui.findn || 10) === x ? 'selected' : ''}>${x}</option>`).join('')}</select>
+          <button class="btn sm" data-act="findGo" ${CLOUD && !ui.finding ? '' : 'disabled'} title="${CLOUD ? '' : t('aiDemoOnly')}">${ui.finding ? t('aiBusy') : t('srcFindGo')}</button></div>${fnd}</div>
+      <label class="fl"><span>${t('notes')}</span><textarea class="in" data-top="notes" rows="3">${esc(c.notes)}</textarea></label>
+      <div class="acts"><span class="sub small">${t('tabRecipients')}: ${n}</span><span class="grow"></span><button class="btn sm" data-act="ctab" data-v="recipients" ${n ? '' : 'disabled'}>${t('tabRecipients')} →</button></div>`;
+  }
+  // Step 4: from which mailbox, by which rules, and what is still missing before the start.
+  function vSend(c) {
+    const seq = seqOf(c), v = S.vectors.find((x) => x.id === c.vid), co = v ? item('company', v.company) : null, mbs = myMailboxes(co), s = S.send;
+    const from = mbs.length ? `<select class="in" data-seqfrom>${mbs.map((m) => `<option ${((seq.from || primaryMailbox(co)) === m.email) ? 'selected' : ''}>${esc(m.email)}</option>`).join('')}</select>` : `<span class="sub">${t('noMailbox')}</span>`;
+    const all = S.leads.filter((l) => l.cid === c.id), go = all.filter(sendable).length, crit = critOf(c), unchecked = crit ? all.filter((l) => !l.off && !chkOf(l, crit)).length : 0;
+    const firsts = varsOf(seq).map((k) => (k === 'A' ? seq.steps : seq.alt[k].steps)[0]), okL = firsts.filter((x) => x.status === 'approved').length;
+    const li = (ok, text) => `<li class="${ok ? 'ok' : ''}">${ok ? '✓' : '○'} ${text}</li>`;
+    const sum = t('sendSum').replace('{start}', s.start).replace('{step}', s.step).replace('{cap}', s.cap).replace('{a}', s.gapMin).replace('{b}', s.gapMax);
+    return `<label class="fl"><span>${t('fromMailbox')}</span>${from}</label>
+      <div class="sitebox"><div class="bh">${t('setSend')} · ${t('risk_' + s.level)}</div><p class="sub small">${sum}</p><button class="link small" data-act="sendOpen">${t('openRules')}</button></div>
+      <div class="sitebox"><div class="bh">${t('readyTitle')}</div><ul class="ready">
+        ${li(go > 0, `${t('readyWho')}: ${go}`)}${li(!unchecked, unchecked ? `${t('readyUnchecked')}: ${unchecked}` : t('readyChecked'))}
+        ${li(okL === firsts.length, `${t('readyLetters')}: ${okL} / ${firsts.length}`)}${li(mbs.length > 0, t('readyBox'))}${li(false, t('readyMail'))}</ul></div>
+      <div class="acts"><button class="btn" disabled>${t('startCampaign')}</button></div><p class="sub small">${t('startNote')}</p>`;
   }
   // Reads rows copied from a spreadsheet (tabs) or a CSV file (commas or semicolons, quotes allowed).
   function parseTable(text) {
@@ -313,7 +384,7 @@
       seen[f.email] = 1; res.added++;
       S.leads.push({ id: uid('L'), cid: c.id, vid: c.vid, company, owner: au.uid, acl: (c.acl || []).slice(), ord: n++, f, blocked: '', okEmail: CLOUD ? '' : f.email });
     });
-    ui.imp = res; commit(); checkLeads();
+    ui.imp = res; if (res.added) { ui.ctab = 'recipients'; ui.rf = 'all'; if (!critOf(c)) critSuggest(c.id); } commit(); checkLeads();
   }
   // Asks the server, a few at a time, whether another manager already works with each new recipient.
   function checkLeads() {
@@ -347,7 +418,7 @@
   const langName = (code) => { try { const n = new Intl.DisplayNames([S.lang === 'uk' ? 'uk' : 'en'], { type: 'language' }).of(code); return n[0].toUpperCase() + n.slice(1); } catch (e) { return code; } };
   function sampleFor(c) {
     if (c.type === 'contact') { const p = c.title.split(' '); return { firstName: p[0], lastName: p.slice(1).join(' '), company: c.f.company, jobTitle: c.f.jobTitle, city: '' }; }
-    const ok = S.leads.filter((x) => x.cid === c.id && !blockedWhy(x) && !x.off), l = ok.find((x) => x.chk && x.chk.proj) || ok[0];
+    const ok = S.leads.filter((x) => x.cid === c.id && sendable(x)), l = ok.find((x) => x.chk && x.chk.proj) || ok[0];
     return l ? Object.assign({}, l.f, { project: (l.chk || {}).proj || '' }) : { firstName: 'Anna', lastName: 'Berg', company: 'Example AS', jobTitle: 'CEO', city: 'Oslo' };
   }
   // A phrase in [[double brackets]] is kept only when every field inside it has a value for this recipient.
@@ -359,7 +430,7 @@
     const seq = seqOf(c), v = S.vectors.find((x) => x.id === c.vid), co = v ? item('company', v.company) : null, mbs = myMailboxes(co);
     const from = mbs.length ? `<select class="in" data-seqfrom>${mbs.map((m) => `<option ${((seq.from || primaryMailbox(co)) === m.email) ? 'selected' : ''}>${esc(m.email)}</option>`).join('')}</select>` : `<span class="sub">${t('noMailbox')}</span>`;
     const list = stepsOf(c), vs = varsOf(seq), k = curVar(seq), nextV = ['B', 'C'].find((x) => !seq.alt[x]);
-    const cnt = {}; S.leads.filter((l) => l.cid === c.id && !blockedWhy(l) && !l.off).forEach((l, n) => { const x = variantOf(seq, l, n); cnt[x] = (cnt[x] || 0) + 1; });
+    const cnt = {}; S.leads.filter((l) => l.cid === c.id && sendable(l)).forEach((l, n) => { const x = variantOf(seq, l, n); cnt[x] = (cnt[x] || 0) + 1; });
     const vtabs = c.type !== 'campaign' ? '' : `<div class="vtabs">${vs.map((x) => `<button class="chip ${x === k ? 'on' : ''}" data-act="seqTab" data-v="${x}">${t('variant')} ${x} · ${cnt[x] || 0}</button>`).join('')}
         ${nextV ? `<button class="chip dash" data-act="seqTabAdd" title="${t('variantHint')}">+ ${t('variant')} ${nextV}</button>` : ''}${k !== 'A' ? `<button class="link small" data-act="seqTabDel">${t('removeVariant')} ${k}</button>` : ''}</div>
       ${vs.length < 2 ? '' : `<div class="row2 vset"><label class="fl"><span>${t('splitHow')}</span><select class="in" data-seqsplit><option value="even" ${seq.split !== 'role' ? 'selected' : ''}>${t('split_even')}</option><option value="role" ${seq.split === 'role' ? 'selected' : ''}>${t('split_role')}</option></select></label>
@@ -385,8 +456,11 @@
         : aiBtn(i, 'draft', mode, i ? t('aiFollow') : t('aiDraft')) + aiBtn(i, 'review', mode === 'gpt' ? 'claude' : 'gpt', t('aiReview'), !st.body.trim())}
         <button class="btn ghost sm" data-act="seqPreview" data-i="${i}">${t('preview')}</button>
         <button class="btn sm" data-act="seqApprove" data-i="${i}" ${st.status === 'approved' || stepReady(st, i) ? '' : 'disabled'}>${st.status === 'approved' ? t('unapprove') : t('approve')}</button></div>
+      <div class="acts tight cmt"><input class="in grow" data-cmt="${i}" placeholder="${t('cmtPh')}" ${CLOUD ? '' : 'disabled'}>${aiBtn(i, 'revise', mode === 'gpt' ? 'gpt' : 'claude', t('cmtGo'), !st.body.trim())}</div>
       ${revBox(st, i)}${ui.prev === i ? `<div class="prevbox"><small>${t('previewFor')} ${esc([smp.firstName, smp.lastName].filter(Boolean).join(' '))}</small><b>${esc(fillVars(st.subject || 'Re: ' + list[0].subject, smp))}</b><pre>${esc(fillVars(withSig(st.body, smp.signature), smp))}</pre></div>` : ''}</div>`; }).join('');
-    return `<div class="seqhead"><label class="fromf"><span>${t('fromMailbox')}</span>${from}</label><span class="ty">${done} / ${list.length} ${t('approvedOf')}</span></div>
+    const camp = c.type === 'campaign', will = camp ? S.leads.filter((l) => l.cid === c.id && sendable(l)).length : 0;
+    return `<div class="seqhead">${camp ? `<span class="sub small">${t('willGet')}: ${will}</span><button class="btn ghost sm" data-act="seqAuto" ${CLOUD && !ui.busy ? '' : 'disabled'} title="${CLOUD ? t('seqAutoHint') : t('aiDemoOnly')}">${ui.auto ? t('aiBusy') + ' ' + ui.auto : t('seqAuto')}</button>`
+      : `<label class="fromf"><span>${t('fromMailbox')}</span>${from}</label>`}<span class="ty">${done} / ${list.length} ${t('approvedOf')}</span></div>
       ${head2}${vtabs}${steps}${list.length < 5 ? `<button class="add" data-act="seqAdd">+ ${t('letter')} ${k}${list.length + 1} · ${t('addFollow')}</button>` : ''}<p class="sub small">${t('chainNote')} ${t('seqNote')}</p>`;
   }
 
@@ -403,12 +477,16 @@
     const photo = hasPhoto ? `<div class="photo" tabindex="0" data-photo title="${t('photoHint')}">${c.photo ? `<img src="${c.photo}" alt="">` : esc(logoText)}</div>
       <p class="sub small"><label class="link filebtn">${t('uploadImage')}<input type="file" accept="image/*" data-file hidden></label> · <span class="hint2">${t('photoHint')}</span>${c.photo ? ` · <button class="link" data-act="rmPhoto">${t('removePhoto')}</button>` : ''}</p>` : '';
     const opts = (list, cur, pre) => list.map((x) => `<option value="${x}" ${x === cur ? 'selected' : ''}>${t(pre + x)}</option>`).join('');
-    const tabList = c.type === 'campaign' ? ['details', 'recipients', 'sequence'] : c.type === 'contact' ? ['details', 'sequence'] : [];
-    const tab = tabList.includes(ui.ctab) ? ui.ctab : 'details';
+    const camp = c.type === 'campaign', tabList = camp ? ['source', 'recipients', 'sequence', 'send'] : c.type === 'contact' ? ['details', 'sequence'] : [];
+    const tab = tabList.includes(ui.ctab) ? ui.ctab : camp ? 'source' : 'details';
+    const sq = camp ? seqOf(c) : null, stepDone = !camp ? {} : { source: S.leads.some((l) => l.cid === c.id), recipients: !!c.listOk,
+      sequence: varsOf(sq).every((k) => (k === 'A' ? sq.steps : sq.alt[k].steps)[0].status === 'approved'), send: false };
+    const fromCamp = c.parent ? S.cards.find((x) => x.id === c.parent) : null;
     const nLeads = S.leads.filter((l) => l.cid === c.id).length;
-    const tabs = tabList.length ? `<div class="tabs ctabs">${tabList.map((x) => `<button class="${tab === x ? 'on' : ''}" data-act="ctab" data-v="${x}">${t('tab' + x[0].toUpperCase() + x.slice(1))}${x === 'recipients' ? ` · ${nLeads}` : ''}</button>`).join('')}</div>` : '';
+    const tabs = tabList.length ? `<div class="tabs ctabs ${camp ? 'steps' : ''}">${tabList.map((x, i) => `<button class="${tab === x ? 'on' : ''} ${stepDone[x] ? 'done' : ''}" data-act="ctab" data-v="${x}">${camp ? `<i>${stepDone[x] ? '✓' : i + 1}</i>` : ''}${t('tab' + x[0].toUpperCase() + x.slice(1))}${x === 'recipients' ? ` · ${nLeads}` : ''}</button>`).join('')}</div>` : '';
     return `<div class="overlay" data-act="closeBg"><div class="modal ${tabList.length ? 'wide' : ''}" role="dialog"><button class="mclose" data-act="closeAny" aria-label="Close">×</button>
-      <div class="mleft">${tabs}${tab === 'recipients' ? vRecipients(c) : tab === 'sequence' ? vSequence(c) : `${photo}
+      <div class="mleft">${tabs}${tab === 'source' ? vSource(c) : tab === 'send' ? vSend(c) : tab === 'recipients' ? vRecipients(c) : tab === 'sequence' ? vSequence(c) : `${photo}
+        ${fromCamp ? `<p class="sub small fromc">${t('fromCampaign')}: <button class="link" data-act="open" data-id="${fromCamp.id}">${esc(fromCamp.title)}</button>${(c.tags || []).map((x) => ` <span class="tagc">#${esc(x)}</span>`).join('')}</p>` : ''}
         <label class="fl"><span>${c.type === 'contact' ? t('name') : t('title')}</span><input class="in big" data-top="title" value="${esc(c.title)}"></label>
         ${F.map((x) => field(c, x[0], x[1], x[2])).join('')}
         <label class="fl"><span>${t('notes')}</span><textarea class="in" data-top="notes" rows="5">${esc(c.notes)}</textarea></label>`}
@@ -618,13 +696,21 @@
       body = `<div class="genpanel"><span class="ty">${t('stageLater')}</span><h2>${t('genTitle')}</h2><p>${t('genHow')}</p>
         <div class="gtypes">${DOC_TYPES.map((x) => `<span class="gtype">${svg('<path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4M10 12h5M10 16h5"/>')}${t('doc_' + x)}</span>`).join('')}</div><p class="sub">${t('genLater')}</p></div>`;
     } else {
-      const q = (ui.cq || '').trim().toLowerCase();
-      const rows = S.cards.filter((c) => c.type === 'contact' || c.type === 'company')
-        .filter((c) => !q || [c.title, c.f.company, c.f.email].join(' ').toLowerCase().includes(q)).sort((a, b) => a.title.localeCompare(b.title))
-        .map((c) => `<tr class="crowt" data-act="open" data-id="${c.id}"><td><span class="tyi">${svg(TYPE_ICONS[c.type])}</span> ${esc(c.title)}</td><td>${esc(c.type === 'contact' ? c.f.company || '' : c.f.country || '')}</td><td>${esc(c.f.email || c.f.website || '')}</td>
+      const q = (ui.cq || '').trim().toLowerCase(), tg = ui.ctag || '';
+      const tagc = (x) => (x || []).map((y) => `<span class="tagc">#${esc(y)}</span>`).join(' ');
+      const cards = S.cards.filter((c) => c.type === 'contact' || c.type === 'company'), leads = S.leads.filter((l) => !l.card);
+      const tags = {}; cards.forEach((c) => (c.tags || []).forEach((x) => { tags[x] = (tags[x] || 0) + 1; })); leads.forEach((l) => (l.tags || []).forEach((x) => { tags[x] = (tags[x] || 0) + 1; }));
+      const rows = cards.filter((c) => (!tg || (c.tags || []).includes(tg)) && (!q || [c.title, c.f.company, c.f.email].join(' ').toLowerCase().includes(q))).sort((a, b) => a.title.localeCompare(b.title))
+        .map((c) => `<tr class="crowt" data-act="open" data-id="${c.id}"><td><span class="tyi">${svg(TYPE_ICONS[c.type])}</span> ${esc(c.title)}</td><td>${esc(c.type === 'contact' ? c.f.company || '' : c.f.country || '')}</td><td>${esc(c.f.email || c.f.website || '')}</td><td>${tagc(c.tags)}</td>
           <td><i class="sdot" style="background:${stageColor(c.stage)}"></i>${t('st_' + c.stage)}</td><td>${esc((item('company', (c.vec || {}).company) || {}).name || '')}</td><td>${CLOUD ? esc(userName(c.owner)) : t('you')}</td><td>${blockedWhy(c) ? `<span class="blk">${t('blockedBadge')}</span>` : ''}</td></tr>`).join('');
-      body = `<p class="sub">${t('clientsReal')}</p><input class="in search wide" data-cq placeholder="${t('searchClients')}" value="${esc(ui.cq || '')}">`
-        + (rows ? `<table class="ctable"><tr><th>${t('name')}</th><th>${t('company')}</th><th>${t('email')}</th><th>${t('stage')}</th><th>${t('zone_company')}</th><th>${t('ownerCol')}</th><th></th></tr>${rows}</table>` : `<p class="later">${t('noClients')}</p>`);
+      const lrowsAll = leads.filter((l) => (!tg || (l.tags || []).includes(tg)) && (!q || [leadName(l), l.f.company, l.f.email].join(' ').toLowerCase().includes(q)));
+      const lrows = lrowsAll.slice(0, 300).map((l) => { const cm = S.cards.find((x) => x.id === l.cid);
+        return `<tr class="crowt" data-act="open" data-id="${l.cid}"><td>${esc(leadName(l) || '—')}</td><td>${esc(l.f.company || '')}</td><td>${esc(l.f.email || l.f.website || '')}</td><td>${tagc(l.tags)}</td>
+          <td class="sub">${t('inCampaign')}: ${esc(cm ? cm.title : '')}</td><td>${esc((item('company', l.company) || {}).name || '')}</td><td>${CLOUD ? esc(userName(l.owner)) : t('you')}</td><td>${l.off ? `<span class="ty">${t('siteOff')}</span>` : ''}</td></tr>`; }).join('');
+      const tchips = Object.keys(tags).length ? `<div class="vtabs"><button class="chip ${tg ? '' : 'on'}" data-act="ctag" data-v="">${t('all')}</button>${Object.keys(tags).sort().map((x) => `<button class="chip ${tg === x ? 'on' : ''}" data-act="ctag" data-v="${esc(x)}">#${esc(x)} · ${tags[x]}</button>`).join('')}</div>` : '';
+      body = `<p class="sub">${t('clientsReal')}</p><input class="in search wide" data-cq placeholder="${t('searchClients')}" value="${esc(ui.cq || '')}">${tchips}`
+        + (rows || lrows ? `<table class="ctable"><tr><th>${t('name')}</th><th>${t('company')}</th><th>${t('email')}</th><th>${t('tagsCol')}</th><th>${t('stage')}</th><th>${t('zone_company')}</th><th>${t('ownerCol')}</th><th></th></tr>${rows}${lrows}</table>
+          ${lrowsAll.length > 300 ? `<p class="sub small">${t('shown')} 300 ${t('ofTotal')} ${lrowsAll.length}</p>` : ''}` : `<p class="later">${t('noClients')}</p>`);
     }
     return `<main class="body"><div class="tools flat">${tabs}<button class="btn sm gen ${ui.dbtab === 'generator' ? 'on' : ''}" data-act="dbtab" data-v="generator">${svg(UI_ICONS.spark)}${t('generate')}</button></div><section class="box">${body}</section></main>`;
   }
@@ -705,21 +791,53 @@
     moveCard(d) { const c = S.cards.find((x) => x.id === d.id), n = STAGES[stageIdx(c.stage) + +d.d]; if (n) { c.stage = n[0]; commit(); } },
     gotoStage(d) { const col = document.querySelector(`.col[data-stage="${d.stage}"]`); if (col) col.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' }); },
     wMove(d) { const i = S.widgets.indexOf(d.id), j = i + +d.d; if (i >= 0 && j >= 0 && j < S.widgets.length) { [S.widgets[i], S.widgets[j]] = [S.widgets[j], S.widgets[i]]; commit(); } },
-    ctab(d) { ui.ctab = d.v; ui.imp = null; ui.prev = -1; ui.delArm = false; render(); },
+    ctab(d) { ui.ctab = d.v; ui.imp = null; ui.prev = -1; ui.delArm = false; const c = cur(); if (d.v === 'recipients' && c && !critOf(c) && S.leads.some((l) => l.cid === c.id)) critSuggest(c.id); render(); },
     leadImport() { const el = document.querySelector('[data-leadpaste]'); if (el && el.value.trim()) importLeads(cur(), el.value); },
-    siteGo() { siteCheck(ui.open); },
+    siteGo() { runCheck(ui.open); },
     siteStop() { if (ui.site) ui.site.stop = true; render(); },
+    critAgain() { const c = cur(); c.check = null; critSuggest(c.id); },
+    rf(d) { ui.rf = d.v; render(); },
     // Leaving people out is the user's decision: the check only proposes it.
-    siteDrop() { const c = cur(), q = (c.check || {}).q || ''; S.leads.forEach((l) => { if (l.cid === c.id && l.chk && l.chk.q === q && (l.chk.s === 'no' || l.chk.s === 'nosite')) l.off = true; }); commit(); },
-    siteBack() { const c = cur(); S.leads.forEach((l) => { if (l.cid === c.id) l.off = false; }); commit(); },
-    leadOn(d) { const l = S.leads.find((x) => x.id === d.id); if (l) l.off = false; commit(); },
+    siteDrop() { const c = cur(), crit = critOf(c); S.leads.forEach((l) => { if (l.cid === c.id && (chkOf(l, crit) || {}).s === 'no') l.off = true; }); commit(); },
+    siteBack() { const c = cur(); S.leads.forEach((l) => { if (l.cid === c.id) l.off = false; }); if (ui.rf === 'off') ui.rf = 'all'; commit(); },
+    leadOff(d) { const l = S.leads.find((x) => x.id === d.id); if (l) l.off = !l.off; commit(); },
+    listOk() { cur().listOk = true; ui.ctab = 'sequence'; commit(); },
+    // AI looks for companies on the web; each becomes a recipient, with an address when the site shows one.
+    findGo() {
+      const c = cur(), q = (document.querySelector('[data-findq]') || {}).value || '', n = +((document.querySelector('[data-findn]') || {}).value || 10);
+      if (!q.trim() || ui.finding) return; ui.findq = q; ui.findn = n; ui.finding = true; ui.found = null; render();
+      const v = S.vectors.find((x) => x.id === c.vid), company = v ? v.company : (c.vec || {}).company;
+      const have = {}; S.leads.forEach((l) => { if (l.cid === c.id) have[coKey(l)] = 1; });
+      Cloud.find({ vid: c.vid, request: q, n, skip: Object.keys(have).filter((x) => !x.startsWith('name:')) }).then((r) => {
+        ui.finding = false; const c2 = S.cards.find((x) => x.id === c.id); if (!c2) { render(); return; }
+        const res = { co: 0, mail: 0 }, seen = {}; S.leads.forEach((l) => { if (l.company === company && l.f.email) seen[l.f.email] = 1; }); let ord = S.leads.length;
+        (r.companies || []).forEach((x) => {
+          if (have[hostOf(x.website)]) return; res.co++;
+          const mails = (x.emails || []).filter((e) => !seen[e]); mails.forEach((e) => { seen[e] = 1; res.mail++; });
+          (mails.length ? mails : ['']).forEach((e) => S.leads.push({ id: uid('L'), cid: c2.id, vid: c2.vid, company, owner: au.uid, acl: (c2.acl || []).slice(), ord: ord++, blocked: '', okEmail: CLOUD ? '' : e,
+            f: { company: x.company, website: x.website, country: x.country || '', email: e, fit: x.why || '', source: 'AI search' } }));
+        });
+        ui.found = res; commit(); checkLeads();
+      }).catch((e) => { ui.finding = false; ui.found = { err: String(e && e.message || e) }; render(); });
+    },
+    // Drafts every missing letter in turn: A1 by Claude, B1 by ChatGPT, then one reminder for each.
+    seqAuto() {
+      const c = cur(), q = seqOf(c); if (ui.busy || !CLOUD) return;
+      if (!q.alt.B) q.alt.B = { who: '', steps: [newStep(0)] };
+      ['A', 'B'].forEach((k) => { const st = k === 'A' ? q.steps : q.alt[k].steps; if (st.length < 2) st.push(newStep(4)); });
+      const jobs = []; [0, 1].forEach((i) => ['A', 'B'].forEach((k) => { const st = (k === 'A' ? q.steps : q.alt[k].steps)[i]; if (!st.body.trim()) jobs.push([k, i]); }));
+      commit(); const step = () => { const j = jobs.shift(); if (!j) { ui.auto = ''; render(); return; } ui.auto = j[0] + (j[1] + 1); ui.var = j[0];
+        const st = (j[0] === 'A' ? seqOf(cur()).steps : seqOf(cur()).alt[j[0]].steps)[j[1]], m = modeOf(st, j[0]);
+        aiRun(c.id, j[0], j[1], 'draft', m === 'gpt' ? 'gpt' : 'claude', '').then(step, () => { ui.auto = ''; render(); }); };
+      step();
+    },
     leadDel(d) { S.leads = S.leads.filter((l) => l.id !== d.id); commit(); },
     leadClear() { if (!ui.delArm) { ui.delArm = true; render(); return; } const id = ui.open; S.leads = S.leads.filter((l) => l.cid !== id); ui.delArm = false; ui.imp = null; commit(); },
     leadCard(d) {
       const l = S.leads.find((x) => x.id === d.id), c = cur(); if (!l) return;
-      const k = { id: uid('k'), vid: c.vid, owner: au.uid, acl: (c.acl || []).slice(), ord: Date.now(), type: 'contact', stage: 'new', title: leadName(l), vec: Object.assign({}, c.vec), parent: c.id,
+      const k = { id: uid('k'), vid: c.vid, owner: au.uid, acl: (c.acl || []).slice(), ord: Date.now(), type: 'contact', stage: 'new', title: [l.f.firstName, l.f.lastName].filter(Boolean).join(' ') || l.f.company || l.f.email, vec: Object.assign({}, c.vec), parent: c.id,
         f: { jobTitle: l.f.jobTitle || '', company: l.f.company || '', email: l.f.email, phone: l.f.phone || '', linkedin: l.f.linkedin || '' }, next: { text: '', date: '' },
-        awaiting: false, auto: { follow: false, reply: false, notify: true, draft: true }, notes: '', photo: '', blocked: l.blocked || '', okEmail: l.okEmail || '' };
+        awaiting: false, auto: { follow: false, reply: false, notify: true, draft: true }, notes: (l.chk && l.chk.ev) || '', photo: '', blocked: l.blocked || '', okEmail: l.okEmail || '', tags: (l.tags || []).slice() };
       S.cards.push(k); l.card = k.id; commit();
     },
     seqAdd() { const s = stepsOf(cur()); if (s.length < 5) s.push(newStep((+s[s.length - 1].day || 0) + (s.length === 1 ? 4 : 5))); commit(); },
@@ -736,22 +854,7 @@
       commit();
     },
     seqApprove(d) { const st = stepsOf(cur())[+d.i]; st.status = st.status === 'approved' ? 'draft' : 'approved'; commit(); },
-    // The answer may arrive after the data was refreshed from the cloud, so the letter is found again by its ids.
-    aiGo(d) {
-      const c = cur(), q = seqOf(c), k = curVar(q), list = stepsOf(c), i = +d.i, st = list[i], f = c.f || {};
-      if (ui.busy || !CLOUD) return; ui.busy = `${i}|${d.op}|${d.eng}`; render();
-      const find = () => { const c2 = S.cards.find((x) => x.id === c.id), q2 = c2 && c2.seq; if (!q2) return null; return (k === 'A' ? q2.steps : (q2.alt[k] || {}).steps || []).find((x) => x.id === st.id); };
-      Cloud.ai({ op: d.op, engine: d.eng, vid: c.vid, step: i, ui: S.lang, letter: { subject: st.subject, body: st.body }, first: { subject: list[0].subject, body: list[0].body },
-        card: { title: c.title, notes: c.notes || '', type: c.type, jobTitle: f.jobTitle || '', company: f.company || '', who: varsOf(q).length > 1 && q.split === 'role' ? whoOf(q, k) : '',
-          checkQ: S.leads.some((l) => l.cid === c.id && l.chk && l.chk.s === 'yes') ? (c.check || {}).q || '' : '' } })
-        .then((r) => {
-          ui.busy = ''; const s2 = find(); if (!s2) { render(); return; }
-          if (d.op === 'review') { s2.review = { ok: !!r.ok, issues: r.issues || [], subject: r.subject || '', body: r.body || '', by: r.engine }; if (r.ok && s2.status === 'draft') s2.status = 'reviewed'; }
-          else { s2.subject = i > 0 && d.op === 'draft' ? '' : r.subject || s2.subject; s2.body = r.body; s2.status = 'draft'; s2.by = r.engine; s2.review = null; }
-          commit();
-        })
-        .catch((e) => { ui.busy = ''; ui.err = String(e && e.message ? e.message : e); ui.errAi = true; render(); });
-    },
+    aiGo(d) { const el = document.querySelector(`[data-cmt="${d.i}"]`); aiRun(ui.open, curVar(seqOf(cur())), +d.i, d.op, d.eng, el ? el.value : '').catch(() => {}); },
     seqApply(d) { const st = stepsOf(cur())[+d.i], r = st.review; if (!r) return; st.subject = r.subject; st.body = r.body; st.status = 'reviewed'; st.review = null; commit(); },
     seqRevHide(d) { stepsOf(cur())[+d.i].review = null; commit(); },
     seqPreview(d) { ui.prev = ui.prev === +d.i ? -1 : +d.i; render(); },
@@ -825,6 +928,7 @@
     fdue() { ui.fdue = !ui.fdue; render(); },
     zone(d) { ui.zone = d.v; render(); },
     dbtab(d) { ui.dbtab = d.v; render(); },
+    ctag(d) { ui.ctag = d.v; render(); },
     open(d) { ui.open = d.id; ui.delArm = false; ui.ctab = 'details'; ui.imp = null; ui.prev = -1; ui.lq = ''; render(); },
     close() { ui.open = null; render(); },
     closeAny() { ui.open = null; ui.edit = null; render(); },
@@ -901,7 +1005,9 @@
     const el = e.target, c = cur(), p = curParam();
     if (el.hasAttribute('data-search')) { ui.q = el.value; const pos = el.selectionStart; render(); const n = document.querySelector('[data-search]'); n.focus(); n.setSelectionRange(pos, pos); return; }
     if (el.hasAttribute('data-lq')) { ui.lq = el.value; const pos = el.selectionStart; render(); const n = document.querySelector('[data-lq]'); n.focus(); n.setSelectionRange(pos, pos); return; }
-    if (el.hasAttribute('data-chkq') && c) { c.check = { q: el.value }; save(); return; }
+    if (el.dataset.crit && c) { const k = c.check = c.check || {}; if (el.dataset.crit === 'terms') k.terms = el.value.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean); else if (el.dataset.crit === 'tag') k.tag = el.value.trim().toLowerCase().replace(/^#/, '').replace(/[^a-z0-9а-яіїєґ]+/gi, '-'); else k.crit = el.value; save(); return; }
+    if (el.hasAttribute('data-findq')) { ui.findq = el.value; return; }
+    if (el.hasAttribute('data-cmt') || el.dataset.lemail) return;
     if (el.hasAttribute('data-seqwho') && c) { const q = seqOf(c), k = curVar(q); if (k === 'A') q.whoA = el.value; else q.alt[k].who = el.value; save(); return; }
     if (el.dataset.seq && c) {
       const [i, k] = el.dataset.seq.split('|'), st = stepsOf(c)[+i]; st[k] = k === 'day' ? Math.max(0, +el.value || 0) : el.value;
@@ -934,7 +1040,8 @@
     if (el.hasAttribute('data-seqfrom') && c) { seqOf(c).from = el.value; commit(); return; }
     if (el.hasAttribute('data-seqsplit') && c) { seqOf(c).split = el.value; commit(); return; }
     if (el.hasAttribute('data-seqwho') && c) { render(); return; }
-    if (el.hasAttribute('data-chkq') && c) { render(); return; }
+    if (el.dataset.crit && c) { render(); return; }
+    if (el.dataset.lemail) { const l = S.leads.find((x) => x.id === el.dataset.lemail), e = el.value.trim().toLowerCase(); if (l && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) { l.f.email = e; if (!CLOUD) l.okEmail = e; commit(); checkLeads(); } return; }
     if (el.dataset.stepmode && c) { stepsOf(c)[+el.dataset.stepmode].mode = el.value; commit(); return; }
     if (el.hasAttribute('data-seqlang') && c) { seqOf(c).lang = el.value; commit(); return; }
     // The slider loads a ready set of limits; each number can then be changed, but never past the red zone.

@@ -109,7 +109,9 @@ const Cloud = (function () {
     // Asks the server to write, polish or check a letter. The AI keys stay on the server.
     ai(payload) { return firebase.app().functions('europe-west1').httpsCallable('ai', { timeout: 130000 })(payload).then((r) => r.data); },
     // Asks the server to open a company's website and look for the given words.
-    research(payload) { return firebase.app().functions('europe-west1').httpsCallable('research', { timeout: 70000 })(payload).then((r) => r.data); },
+    research(payload) { return firebase.app().functions('europe-west1').httpsCallable('research', { timeout: 250000 })(payload).then((r) => r.data); },
+    criterion(payload) { return firebase.app().functions('europe-west1').httpsCallable('criterion', { timeout: 70000 })(payload).then((r) => r.data); },
+    find(payload) { return firebase.app().functions('europe-west1').httpsCallable('find', { timeout: 310000 })(payload).then((r) => r.data); },
     takenBy(id) { return db.collection('taken').doc(id).get().then((s) => (s.exists ? s.data().owner : null)).catch(() => null); },
   };
 })();
