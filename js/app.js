@@ -241,20 +241,30 @@
   const leadName = (l) => [l.f.firstName, l.f.lastName].filter(Boolean).join(' ') || l.f.email;
   const hostOf = (w) => String(w || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split(/[/?#]/)[0];
   const coKey = (l) => hostOf(l.f.website) || (l.f.company ? 'name:' + l.f.company.trim().toLowerCase() : '');
-  const critOf = (c) => ((c && c.check) || {}).crit || '';
+  // The criterion lives in the topic of the vector (the default for its campaigns); a campaign card may keep its own version.
+  const termList = (x) => (Array.isArray(x) ? x : String(x || '').split(',')).map((w) => String(w).trim().toLowerCase()).filter(Boolean);
+  const tagOf = (x) => String(x || '').trim().toLowerCase().replace(/^#/, '').replace(/[^a-z0-9а-яіїєґ]+/gi, '-').replace(/^-|-$/g, '');
+  const topicOf = (c) => { const v = c && S.vectors.find((x) => x.id === c.vid); return v ? item('topic', v.topic) : null; };
+  function checkCfg(c) {
+    if (c && c.check && String(c.check.crit || '').trim()) return { crit: c.check.crit, tag: tagOf(c.check.tag), terms: termList(c.check.terms), own: true };
+    const tp = topicOf(c), s = (tp && tp.s) || {};
+    return { crit: s.crit || '', tag: tagOf(s.tag), terms: termList(s.terms), own: false };
+  }
+  const critOf = (c) => checkCfg(c).crit;
   const chkOf = (l, crit) => (l.chk && crit && l.chk.c === crit ? l.chk : null);
   const sendable = (l) => !!l.f.email && !blockedWhy(l) && !l.off;
   // The criterion comes from the topic brief: AI proposes it once, the user confirms or edits it.
+  // AI proposes the criterion from the topic brief. From a campaign it is saved in the card; from the topic settings, in the topic.
   function critSuggest(cid) {
     const c = S.cards.find((x) => x.id === cid); if (!c || !CLOUD || ui.critBusy) return;
     ui.critBusy = true; render();
-    Cloud.criterion({ vid: c.vid }).then((r) => { ui.critBusy = false; const c2 = S.cards.find((x) => x.id === cid); if (c2 && !critOf(c2)) c2.check = { crit: r.criterion || '', tag: r.tag || '', terms: r.terms || [] }; commit(); })
+    Cloud.criterion({ vid: c.vid }).then((r) => { ui.critBusy = false; const c2 = S.cards.find((x) => x.id === cid); if (c2) c2.check = { crit: r.criterion || '', tag: r.tag || '', terms: r.terms || [] }; commit(); })
       .catch((e) => { ui.critBusy = false; ui.err = String(e && e.message || e); ui.errAi = true; render(); });
   }
   const setTag = (l, tag, on) => { if (!tag) return; const s = (l.tags || []).filter((x) => x !== tag); if (on) s.push(tag); l.tags = s; };
   // The check: one request per company, three at a time. What is already known about a company from another campaign is reused.
   function runCheck(cid) {
-    const c = S.cards.find((x) => x.id === cid), k = (c && c.check) || {}, crit = k.crit || ''; if (!c || !crit.trim() || ui.site) return;
+    const c = S.cards.find((x) => x.id === cid), k = checkCfg(c), crit = k.crit || ''; if (!c || !crit.trim() || ui.site) return;
     const mine = () => S.leads.filter((l) => l.cid === cid), queue = [], seen = {};
     const known = {}; S.leads.forEach((l) => { const x = chkOf(l, crit); if (x && l.cid !== cid && (x.s === 'yes' || x.s === 'no')) known[coKey(l)] = x; });
     const put = (key, r) => mine().forEach((l) => { if (coKey(l) === key) { l.chk = { s: r.s, ev: r.ev || '', proj: r.proj || '', url: r.url || '', by: r.by || '', c: crit }; setTag(l, k.tag, r.s === 'yes'); } });
@@ -287,19 +297,19 @@
       }, (e) => { ui.busy = ''; ui.err = String(e && e.message ? e.message : e); ui.errAi = true; render(); throw e; });
   }
   function vCriterion(c, all) {
-    const k = c.check || {}, crit = k.crit || '';
+    const k = checkCfg(c), crit = k.crit || '';
     const n = { yes: 0, unsure: 0, no: 0 }; let todo = 0, off = 0;
     all.forEach((l) => { if (l.off) off++; const x = chkOf(l, crit); if (x) n[x.s] = (n[x.s] || 0) + 1; else todo++; });
     const noIn = all.filter((l) => !l.off && (chkOf(l, crit) || {}).s === 'no').length;
     const cos = Object.keys(all.reduce((m, l) => { if (!chkOf(l, crit) && coKey(l)) m[coKey(l)] = 1; return m; }, {})).length;
     const chip = (v, label, cnt) => `<button class="chip ${ui.rf === v ? 'on' : ''}" data-act="rf" data-v="${v}">${label} · ${cnt}</button>`;
-    return `<div class="sitebox"><div class="bh">${t('critTitle')}</div><p class="sub small">${t('critNote')}</p>
-      ${!crit && ui.critBusy ? `<p class="sub">${t('critBusy')}</p>` : `<label class="fl"><span>${t('critLabel')}</span><input class="in" data-crit="crit" value="${esc(crit)}" placeholder="${t('critPh')}" ${ui.site ? 'disabled' : ''}></label>
+    return `<div class="sitebox"><div class="bh">${t('critTitle')}</div><p class="sub small">${t('critNote')}</p><p class="sub small">${t(k.own ? 'critOwn' : crit ? 'critFromTopic' : 'critNone')}</p>
+      ${ui.critBusy ? `<p class="sub">${t('critBusy')}</p>` : `<label class="fl"><span>${t('critLabel')}</span><input class="in" data-crit="crit" value="${esc(crit)}" placeholder="${t('critPh')}" ${ui.site ? 'disabled' : ''}></label>
       <div class="row2"><label class="fl"><span>${t('critTag')}</span><input class="in" data-crit="tag" value="${esc(k.tag || '')}" placeholder="data-center" ${ui.site ? 'disabled' : ''}></label>
         <label class="fl"><span>${t('critTerms')}</span><input class="in" data-crit="terms" value="${esc((k.terms || []).join(', '))}" ${ui.site ? 'disabled' : ''}></label></div>
       <div class="acts tight">${ui.site ? `<span class="sub small">${t('siteRun')} ${ui.site.done} / ${ui.site.total}</span><button class="btn ghost sm" data-act="siteStop">${t('stop')}</button>`
         : `<button class="btn sm" data-act="siteGo" ${CLOUD && crit.trim() && all.length ? '' : 'disabled'} title="${CLOUD ? '' : t('aiDemoOnly')}">${t(todo ? 'siteGo' : 'siteAgain')}${todo ? ` (${todo})` : ''}</button>
-          <button class="link small" data-act="critAgain" ${CLOUD ? '' : 'disabled'}>${t('critAgain')}</button>`}</div>
+          <button class="link small" data-act="critAi" ${CLOUD ? '' : 'disabled'} title="${CLOUD ? '' : t('aiDemoOnly')}">${t('critAi')}</button>${k.own ? `<button class="link small" data-act="critAgain">${t('critAgain')}</button>` : ''}`}</div>
       ${todo && !ui.site ? `<p class="sub small">${t('critCost').replace('{n}', cos).replace('{usd}', Math.max(1, Math.ceil(cos * 0.05)))}</p>` : ''}`}
       ${all.length ? `<div class="vtabs rfs">${chip('all', t('all'), all.length)}${chip('yes', t('site_yes'), n.yes)}${chip('unsure', t('site_unsure'), n.unsure)}${chip('no', t('site_no'), n.no)}${todo ? chip('todo', t('site_todo'), todo) : ''}${off ? chip('off', t('siteOff'), off) : ''}</div>
         <div class="acts tight">${noIn && !ui.site ? `<button class="btn ghost sm" data-act="siteDrop">${t('siteDrop')} (${noIn})</button>` : ''}${off ? `<button class="link small" data-act="siteBack">${t('siteBack')}</button>` : ''}
@@ -399,7 +409,7 @@
       const dom = f.email.split('@')[1]; if (!f.website && !FREE_MAIL.test(dom)) f.website = 'https://' + dom;
       S.leads.push({ id: uid('L'), cid: c.id, vid: c.vid, company, owner: au.uid, acl: (c.acl || []).slice(), ord: n++, f, blocked: '', okEmail: CLOUD ? '' : f.email });
     });
-    ui.imp = res; if (res.added) { ui.ctab = 'recipients'; ui.rf = 'all'; if (!critOf(c)) critSuggest(c.id); } commit(); checkLeads();
+    ui.imp = res; if (res.added) { ui.ctab = 'recipients'; ui.rf = 'all'; } commit(); checkLeads();
   }
   // Asks the server, a few at a time, whether another manager already works with each new recipient.
   function checkLeads() {
@@ -560,7 +570,10 @@
       + sIn(it, 'hook', t('topicHook'), 1, t('ph_hook')) + sIn(it, 'offer', t('briefOffer'), 1, t('ph_offer'))
       + `<div class="fl"><span>${t('briefTone')}</span><div class="chips">${tones}</div></div>`
       + sIn(it, 'cta', t('briefCta'), 0, t('ph_cta')) + sIn(it, 'proof', t('topicProof'), 0, t('ph_proof'))
-      + sIn(it, 'avoid', t('briefAvoid'), 1, t('ph_avoid')) + sIn(it, 'sample', t('briefSample'), 1, t('ph_sample')) + sIn(it, 'keywords', t('topicKeywords'));
+      + sIn(it, 'avoid', t('briefAvoid'), 1, t('ph_avoid')) + sIn(it, 'sample', t('briefSample'), 1, t('ph_sample')) + sIn(it, 'keywords', t('topicKeywords'))
+      + `<div class="brief"><div class="bh">${t('critTitle')}</div><p class="sub small">${t('topicCritNote')}</p></div>`
+      + sIn(it, 'crit', t('critLabel'), 0, t('critPh')) + `<div class="row2">${sIn(it, 'tag', t('critTag'), 0, 'data-center')}${sIn(it, 'terms', t('critTerms'), 0, 'data center, data centre, mission critical')}</div>`
+      + `<div class="acts tight"><button class="btn ghost sm" data-act="topicCrit" ${CLOUD && !ui.critBusy ? '' : 'disabled'} title="${CLOUD ? '' : t('aiDemoOnly')}">${ui.critBusy ? t('aiBusy') : t('critAi')}</button></div>`;
   }
   const accVal = (co, u) => (managersOf(co).includes(u.id) ? 'manage' : (co.access || {})[u.id] || '');
   const accSel = (co, u) => `<select class="in" data-cacc="${u.id}|${co.id}">${[['', 'accNone'], ['shared', 'accShared'], ['own', 'accOwn']].concat(sup() && u.role === 'admin' ? [['manage', 'accManage']] : [])
@@ -814,11 +827,18 @@
     moveCard(d) { const c = S.cards.find((x) => x.id === d.id), n = STAGES[stageIdx(c.stage) + +d.d]; if (n) { c.stage = n[0]; commit(); } },
     gotoStage(d) { const col = document.querySelector(`.col[data-stage="${d.stage}"]`); if (col) col.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' }); },
     wMove(d) { const i = S.widgets.indexOf(d.id), j = i + +d.d; if (i >= 0 && j >= 0 && j < S.widgets.length) { [S.widgets[i], S.widgets[j]] = [S.widgets[j], S.widgets[i]]; commit(); } },
-    ctab(d) { ui.ctab = d.v; ui.imp = null; ui.prev = -1; ui.delArm = false; const c = cur(); if (d.v === 'recipients' && c && !critOf(c) && S.leads.some((l) => l.cid === c.id)) critSuggest(c.id); render(); },
+    ctab(d) { ui.ctab = d.v; ui.imp = null; ui.prev = -1; ui.delArm = false; render(); },
     leadImport() { const el = document.querySelector('[data-leadpaste]'); if (el && el.value.trim()) importLeads(cur(), el.value); },
     siteGo() { runCheck(ui.open); },
     siteStop() { if (ui.site) ui.site.stop = true; render(); },
-    critAgain() { const c = cur(); c.check = null; critSuggest(c.id); },
+    critAgain() { cur().check = null; commit(); },
+    critAi() { critSuggest(ui.open); },
+    // In the topic settings: AI reads the brief of this topic and fills in the criterion, the tag and the words.
+    topicCrit() {
+      const it = curParam(); if (!CLOUD || ui.critBusy) return; ui.critBusy = true; commit();
+      setTimeout(() => Cloud.criterion({ topic: it.id }).then((r) => { ui.critBusy = false; it.s.crit = r.criterion || ''; it.s.tag = r.tag || ''; it.s.terms = (r.terms || []).join(', '); commit(); },
+        (e) => { ui.critBusy = false; ui.err = String(e && e.message || e); ui.errAi = true; render(); }), 1800);
+    },
     rf(d) { ui.rf = d.v; render(); },
     // Leaving people out is the user's decision: the check only proposes it.
     siteDrop() { const c = cur(), crit = critOf(c); S.leads.forEach((l) => { if (l.cid === c.id && (chkOf(l, crit) || {}).s === 'no') l.off = true; }); commit(); },
@@ -1039,7 +1059,7 @@
     const el = e.target, c = cur(), p = curParam();
     if (el.hasAttribute('data-search')) { ui.q = el.value; const pos = el.selectionStart; render(); const n = document.querySelector('[data-search]'); n.focus(); n.setSelectionRange(pos, pos); return; }
     if (el.hasAttribute('data-lq')) { ui.lq = el.value; const pos = el.selectionStart; render(); const n = document.querySelector('[data-lq]'); n.focus(); n.setSelectionRange(pos, pos); return; }
-    if (el.dataset.crit && c) { const k = c.check = c.check || {}; if (el.dataset.crit === 'terms') k.terms = el.value.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean); else if (el.dataset.crit === 'tag') k.tag = el.value.trim().toLowerCase().replace(/^#/, '').replace(/[^a-z0-9а-яіїєґ]+/gi, '-'); else k.crit = el.value; save(); return; }
+    if (el.dataset.crit && c) { const e = checkCfg(c), k = c.check = { crit: e.crit, tag: e.tag, terms: e.terms }; if (el.dataset.crit === 'terms') k.terms = termList(el.value); else if (el.dataset.crit === 'tag') k.tag = tagOf(el.value); else k.crit = el.value; save(); return; }
     if (el.hasAttribute('data-findq')) { ui.findq = el.value; return; }
     if (el.hasAttribute('data-vopt') && ui.edit) { const v = S.vectors.find((x) => x.id === ui.edit.id); v.opt = { on: true, text: el.value }; save(); return; }
     if (el.hasAttribute('data-cmt') || el.dataset.lemail) return;

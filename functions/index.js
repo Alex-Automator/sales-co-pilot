@@ -63,11 +63,24 @@ exports.ai = onCall({ secrets: [ANTHROPIC_API_KEY, OPENAI_API_KEY], timeoutSecon
 
 const vectorCtx = async (v) => { const [company, direction, audience, topic] = await Promise.all([param(v.company), param(v.direction), param(v.audience), param(v.topic)]); return { company, direction, audience, topic }; };
 
-// criterion({ vid }) -> { criterion, tag, terms }: what must be true of a company, taken from the topic brief.
+// criterion({ vid }) or criterion({ topic }) -> { criterion, tag, terms }: what must be true of a company, taken from the topic brief.
 exports.criterion = onCall({ secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 60, memory: '256MiB' }, async (req) => {
-  const { uid, v } = await guard(req);
+  let uid, ctx;
+  if (req.data && req.data.topic) {
+    // Called from the topic settings: there may be no vector yet, so access is checked on the topic itself.
+    if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+    uid = req.auth.uid;
+    const [user, meta, tp] = await Promise.all([db().collection('users').doc(uid).get(), db().collection('meta').doc('app').get(), db().collection('params').doc(String(req.data.topic)).get()]);
+    if (!user.exists || !['admin', 'user'].includes(user.data().role)) throw new HttpsError('permission-denied', 'Your access is not approved yet.');
+    if (!tp.exists || tp.data().zone !== 'topic') throw new HttpsError('not-found', 'The topic is not saved yet. Try again in a few seconds.');
+    const acl = tp.data().acl || [], superAdmin = meta.exists && meta.data().adminUid === uid;
+    if (!superAdmin && !acl.includes(uid) && !acl.includes('*')) throw new HttpsError('permission-denied', 'You have no access to this topic.');
+    ctx = { topic: tp.data(), card: {} };
+  } else {
+    const g = await guard(req); uid = g.uid; ctx = Object.assign(await vectorCtx(g.v), { card: {} });
+  }
   await countUse(uid, 'n', lib.LIMITS.perUserPerDay);
-  try { return await lib.criterion(fetch, ANTHROPIC_API_KEY.value(), Object.assign(await vectorCtx(v), { card: {} })); }
+  try { return await lib.criterion(fetch, ANTHROPIC_API_KEY.value(), ctx); }
   catch (e) { console.error('criterion failed', e.message); throw new HttpsError('internal', e.message.slice(0, 300)); }
 });
 
