@@ -300,13 +300,13 @@ function inlineImages(html) {
 }
 // A letter in the form Gmail accepts: plain text, or plain text plus an HTML version when the mailbox has an HTML signature.
 // body is the letter itself; sig is the plain signature (and opt-out line); sigHtml replaces sig in the HTML version.
-function rawMail({ from, to, subject, body, sig, sigHtml }) {
-  const head = [`From: ${from}`, `To: ${to}`, `Subject: ${mimeWord(String(subject || ''))}`, 'MIME-Version: 1.0'];
-  const text = [String(body || '').replace(/\s+$/, ''), String(sig || '').trim()].filter(Boolean).join('\n\n').replace(/\r?\n/g, '\r\n'), plain = ['Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', b64lines(text)];
+function rawMail({ from, to, subject, body, sig, sigHtml, foot, replyTo }) {
+  const head = [`From: ${from}`, `To: ${to}`, `Subject: ${mimeWord(String(subject || ''))}`].concat(replyTo ? [`In-Reply-To: ${replyTo}`, `References: ${replyTo}`] : [], ['MIME-Version: 1.0']);
+  const text = [String(body || '').replace(/\s+$/, ''), String(sig || '').trim(), String(foot || '').trim()].filter(Boolean).join('\n\n').replace(/\r?\n/g, '\r\n'), plain = ['Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', b64lines(text)];
   const hsig = cleanSig(sigHtml);
   if (!hsig) return b64url(head.concat(plain).join('\r\n'));
   const { html, images } = inlineImages(hsig), id = Date.now().toString(36), A = 'vecA' + id, R = 'vecR' + id;
-  const page = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#222222;">${escHtml(String(body || '').replace(/\s+$/, '')).replace(/\r?\n/g, '<br>')}</div><br>${html}`;
+  const page = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#222222;">${escHtml(String(body || '').replace(/\s+$/, '')).replace(/\r?\n/g, '<br>')}</div><br>${html}${String(foot || '').trim() ? `<div style="font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.5;color:#777777;margin-top:14px;">${escHtml(String(foot).trim()).replace(/\r?\n/g, '<br>')}</div>` : ''}`;
   const alt = [`Content-Type: multipart/alternative; boundary="${A}"`, '', '--' + A].concat(plain, ['--' + A, 'Content-Type: text/html; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', b64lines(page), '--' + A + '--']);
   if (!images.length) return b64url(head.concat(alt).join('\r\n'));
   const parts = [`Content-Type: multipart/related; boundary="${R}"`, '', '--' + R].concat(alt);
@@ -328,10 +328,75 @@ async function mailToken(fetchFn, mailbox, scope) {
   if (!r.ok) throw new Error('Google Workspace refused access to ' + mailbox + ': ' + text.slice(0, 240));
   return JSON.parse(text).access_token;
 }
-async function sendMail(fetchFn, mail) {
-  const token = await mailToken(fetchFn, mail.from, 'https://www.googleapis.com/auth/gmail.send');
-  const d = await post(fetchFn, 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { authorization: 'Bearer ' + token }, { raw: rawMail(mail) });
+const SEND = 'https://www.googleapis.com/auth/gmail.send', READ = 'https://www.googleapis.com/auth/gmail.readonly', GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me/';
+async function getJson(fetchFn, url, token) {
+  const r = await fetchFn(url, { headers: { authorization: 'Bearer ' + token } }), text = await r.text();
+  if (!r.ok) { const e = new Error(`gmail answered ${r.status}: ${text.slice(0, 240)}`); e.status = r.status; throw e; }
+  return JSON.parse(text);
+}
+// tokens: an optional cache { 'mailbox|scope': token } so one run asks Google once per mailbox.
+async function tokenFor(fetchFn, tokens, mailbox, scope) { const k = mailbox + '|' + scope; if (!tokens[k]) tokens[k] = await mailToken(fetchFn, mailbox, scope); return tokens[k]; }
+async function sendMail(fetchFn, mail, tokens) {
+  const token = await tokenFor(fetchFn, tokens || {}, mail.from, SEND);
+  const d = await post(fetchFn, GMAIL + 'messages/send', { authorization: 'Bearer ' + token }, Object.assign({ raw: rawMail(mail) }, mail.threadId ? { threadId: mail.threadId } : {}));
   return { id: d.id, threadId: d.threadId };
 }
+// The Message-ID header of a sent letter: later letters of the chain refer to it so that mail programs keep them in one thread.
+async function messageId(fetchFn, tokens, mailbox, id) {
+  const d = await getJson(fetchFn, GMAIL + 'messages/' + id + '?format=metadata&metadataHeaders=Message-ID', await tokenFor(fetchFn, tokens, mailbox, READ));
+  return (((d.payload || {}).headers || []).find((h) => /^message-id$/i.test(h.name)) || {}).value || '';
+}
+// Has anyone answered in this thread? Returns 'replied', 'bounced' or ''.
+async function threadState(fetchFn, tokens, mailbox, threadId) {
+  const d = await getJson(fetchFn, GMAIL + 'threads/' + threadId + '?format=metadata&metadataHeaders=From', await tokenFor(fetchFn, tokens, mailbox, READ));
+  const froms = (d.messages || []).map((m) => ((((m.payload || {}).headers || []).find((h) => /^from$/i.test(h.name)) || {}).value || '').toLowerCase());
+  const other = froms.filter((f) => f && !f.includes(mailbox.toLowerCase()));
+  return other.some((f) => /mailer-daemon|postmaster/.test(f)) ? 'bounced' : other.length ? 'replied' : '';
+}
 
-module.exports = { rawMail, sendMail, MAILER, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };
+// ---------- Campaign run ----------
+const FAR = 9e15;
+const kept = (text, r) => String(text || '').replace(/[ \t]*\[\[([\s\S]*?)\]\]/g, (m, inner) => ((inner.match(/\{\{\s*\w+\s*\}\}/g) || []).every((x) => r[x.replace(/[{}\s]/g, '')]) ? ' ' + inner.trim() : '')).replace(/^ +/gm, '');
+const fill = (text, r) => kept(text, r).replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => (r[k] == null ? '' : String(r[k])));
+const wordsOf = (x) => String(x || '').toLowerCase().split(/[,;\n]/).map((w) => w.trim()).filter(Boolean);
+const UNIT = { m: 60000, h: 3600000, d: 86400000 };
+// How often a silent thread is looked at after the last letter, and for how long, depending on the pace of the campaign.
+const watchPlan = (unitMs) => (unitMs <= UNIT.m ? { every: 3 * 60000, span: 6 * 3600000 } : unitMs <= UNIT.h ? { every: 20 * 60000, span: 3 * 86400000 } : { every: 2 * 3600000, span: 21 * 86400000 });
+
+// Turns a campaign card and its recipients into ready letters. Nothing is sent here.
+// Each step keeps its distance from the previous letter, so a delay by the sending rules moves the rest of the chain too.
+function planRun({ card, leads, myName, unitMs }) {
+  const seq = card.seq || {}, alt = seq.alt || {}, vars = ['A'].concat(['B', 'C'].filter((k) => alt[k]));
+  const stepsOf = (k) => (k === 'A' ? seq.steps : alt[k].steps) || [], whoOf = (k) => (k === 'A' ? seq.whoA : alt[k].who) || '';
+  for (const k of vars) { const st = stepsOf(k); if (!st.length) throw new Error(`Variant ${k} has no letters`); st.forEach((x, i) => { if (x.status !== 'approved') throw new Error(`Letter ${k}${i + 1} is not approved yet`); if (!String(x.body || '').trim()) throw new Error(`Letter ${k}${i + 1} is empty`); }); }
+  const people = leads.filter((l) => l.f && l.f.email && !l.off && !l.blocked).sort((a, b) => (a.ord || 0) - (b.ord || 0));
+  return people.map((l, n) => {
+    let k = 'A';
+    if (vars.length > 1) { if (seq.split === 'role') { const jt = String(l.f.jobTitle || '').toLowerCase(); k = vars.find((v) => wordsOf(whoOf(v)).some((w) => jt.includes(w))) || 'A'; } else k = vars[n % vars.length]; }
+    const r = Object.assign({}, l.f, { project: (l.chk && l.chk.s === 'yes' && l.chk.proj) || '', myName, signature: '' }), st = stepsOf(k);
+    const first = fill(st[0].subject, r).trim();
+    const steps = st.map((x, i) => ({ subject: fill(x.subject, r).trim() || (i ? 'Re: ' + first : first), body: fill(x.body, r).replace(/\s+$/, ''), wait: i ? Math.max(1, (+x.day || 0) - (+st[i - 1].day || 0)) * unitMs : 0 }));
+    return { lead: l.id, to: l.f.email, name: [l.f.firstName, l.f.lastName].filter(Boolean).join(' '), company: l.f.company || '', jobTitle: l.f.jobTitle || '', tags: l.tags || [], variant: k, steps };
+  });
+}
+
+// Sending rules, as plain functions.
+function localParts(ms, tz) {
+  const p = {}; new Intl.DateTimeFormat('en-CA', { timeZone: tz || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23', weekday: 'short' }).formatToParts(new Date(ms)).forEach((x) => { p[x.type] = x.value; });
+  return { day: `${p.year}-${p.month}-${p.day}`, hour: +p.hour, weekend: p.weekday === 'Sat' || p.weekday === 'Sun' };
+}
+function inWindow(rules, ms, tz) { const p = localParts(ms, tz); if (rules.workdays && p.weekend) return false; return p.hour >= (+rules.from || 0) && p.hour < (+rules.to || 24); }
+const capFor = (rules, firstAt, now) => Math.max(1, Math.min(+rules.cap || 10, (+rules.start || 3) + (+rules.step || 0) * Math.floor(Math.max(0, now - (firstAt || now)) / (7 * 86400000))));
+const gapFor = (rules, rnd) => { const a = Math.max(1, +rules.gapMin || 10), b = Math.max(a, +rules.gapMax || a); return Math.round((rules.jitter === false ? a : a + (b - a) * rnd) * 60000); };
+
+// Sends the next letter of one recipient's chain. Returns the fields to save on the send record.
+async function sendStep(fetchFn, tokens, d, run, now) {
+  const step = d.steps[d.i], plan = watchPlan(run.unitMs);
+  const sent = await sendMail(fetchFn, { from: run.from, to: d.to, subject: step.subject, body: step.body, sig: run.sig, sigHtml: run.sigHtml, foot: run.foot, threadId: d.threadId || undefined, replyTo: d.firstMsgId || undefined }, tokens);
+  const out = { status: 'active', i: d.i + 1, threadId: sent.threadId || d.threadId || '', sentAt: (d.sentAt || []).concat([now]), errs: 0, err: '' };
+  if (d.i === 0) out.firstMsgId = await messageId(fetchFn, tokens, run.from, sent.id).catch(() => '');
+  if (out.i < d.steps.length) out.due = now + d.steps[out.i].wait; else { out.due = now + plan.every; out.watchUntil = now + plan.span; }
+  return out;
+}
+
+module.exports = { rawMail, sendMail, MAILER, mailToken, planRun, sendStep, threadState, tokenFor, localParts, inWindow, capFor, gapFor, watchPlan, UNIT, FAR, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };

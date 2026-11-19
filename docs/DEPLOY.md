@@ -55,3 +55,5 @@ firebase deploy --only functions
 gcloud services enable iamcredentials.googleapis.com gmail.googleapis.com --project vector-sales-co-pilot
 gcloud iam service-accounts add-iam-policy-binding vector-mailer@vector-sales-co-pilot.iam.gserviceaccount.com --member="serviceAccount:943187389377-compute@developer.gserviceaccount.com" --role="roles/iam.serviceAccountTokenCreator" --project vector-sales-co-pilot
 ```
+
+Функції запуску кампаній: `campaignStart`, `campaignStatus`, `campaignStop` і `tick` (за розкладом кожні дві хвилини). Дані запуску лежать у колекціях `runs`, `sends` і `mailstate`; з браузера вони недоступні.

@@ -363,12 +363,43 @@
       <label class="fl"><span>${t('notes')}</span><textarea class="in" data-top="notes" rows="3">${esc(c.notes)}</textarea></label>
       <div class="acts"><span class="sub small">${t('tabRecipients')}: ${n}</span><span class="grow"></span><button class="btn sm" data-act="ctab" data-v="recipients" ${n ? '' : 'disabled'}>${t('tabRecipients')} →</button></div>`;
   }
+  // Asks the server how the campaign is going; keeps asking while it runs and the Sending step is open.
+  function runPoll(cid) {
+    clearTimeout(runPoll.t);
+    Cloud.fn('campaignStatus', { cardId: cid }, 30000).then((r) => {
+      ui.run = Object.assign({ cid, at: Date.now() }, r); render();
+      if (r.run && r.run.status === 'active') runPoll.t = setTimeout(() => { if (ui.open === cid && ui.ctab === 'send') runPoll(cid); }, 30000);
+    }, (e) => { ui.run = { cid, err: runWhy(e) }; render(); });
+  }
+  function runWhy(e) {
+    const m = String(e && e.message || e);
+    if (/RULE_PRIMARY/.test(m)) return t('runPrimary').replace('{m}', m.split('RULE_PRIMARY ')[1] || '');
+    if (/MAIL_ACCESS/.test(m)) return t('runNoAccess') + ' ' + m.replace(/.*MAIL_ACCESS\s*/, '');
+    if (/not approved yet/.test(m)) return t('runNotApproved') + ' ' + m;
+    if (/NOT_FOUND|not-found|^internal$/i.test(m)) return t('errDeploy');
+    return m;
+  }
+  function vRun(c) {
+    const r = ui.run && ui.run.cid === c.id ? ui.run : null; if (!r || (!r.run && !r.err)) return '';
+    if (r.err && !r.run) return `<div class="revbox"><b>${t('runFailed')}</b><small>${esc(r.err)}</small></div>`;
+    const n = r.counts || {}, live = r.run.status === 'active', bx = r.box || {}, time = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const sumRow = ['queued', 'active', 'replied', 'done', 'bounced', 'error', 'stopped'].filter((k) => n[k]).map((k) => `<span class="${k === 'replied' ? 'ok' : ''}">${t('run_' + k)}: ${n[k]}</span>`).join('');
+    const why = !live ? '' : !bx.open ? t('runClosed') : bx.newToday >= bx.capToday && r.run.queue ? t('runCap').replace('{n}', bx.capToday) : bx.nextAt > r.now ? t('runNextAt') + ' ' + time(bx.nextAt) : t('runSoon');
+    return `<div class="sitebox"><div class="bh">${t('runTitle')} · ${t(live ? 'run_active' : 'run_' + r.run.status)}</div>
+      <p class="sitesum"><span>${t('runLetters')}: ${r.letters}</span>${sumRow}</p>${live ? `<p class="sub small">${esc(r.run.from)} · ${t('runToday')}: ${bx.newToday} / ${bx.capToday} · ${why}</p>` : ''}
+      <div class="acts tight">${live ? `<button class="btn ghost sm danger" data-act="runStop">${t('runStopBtn')}</button>` : ''}<button class="link small" data-act="runRefresh">${t('runRefresh')}</button></div>
+      <table class="ltable"><tr><th>${t('email')}</th><th>${t('variant')}</th><th>${t('runSent')}</th><th>${t('runState')}</th><th>${t('runNext')}</th></tr>
+      ${(r.rows || []).map((x) => `<tr><td>${esc(x.to)}</td><td>${esc(x.variant)}</td><td>${x.sent} / ${x.of}</td><td><span class="chk ${x.status === 'replied' ? 'yes' : x.status === 'error' || x.status === 'bounced' ? 'unsure' : ''}">${t('run_' + x.status)}</span>${x.err ? `<small class="ev" title="${esc(x.err)}">${esc(x.err)}</small>` : ''}</td><td>${x.next ? time(x.next) : ''}</td></tr>`).join('')}</table>
+      ${live ? `<p class="sub small">${t('runLive')}</p>` : ''}</div>`;
+  }
   // Step 4: from which mailbox, by which rules, and what is still missing before the start.
   function vSend(c) {
     const seq = seqOf(c), v = S.vectors.find((x) => x.id === c.vid), co = v ? item('company', v.company) : null, mbs = myMailboxes(co), s = S.send;
     const from = mbs.length ? `<select class="in" data-seqfrom>${mbs.map((m) => `<option ${((seq.from || primaryMailbox(co)) === m.email) ? 'selected' : ''}>${esc(m.email)}</option>`).join('')}</select>` : `<span class="sub">${t('noMailbox')}</span>`;
     const all = S.leads.filter((l) => l.cid === c.id), go = all.filter(sendable).length, crit = critOf(c), unchecked = crit ? all.filter((l) => !l.off && !chkOf(l, crit)).length : 0;
-    const firsts = varsOf(seq).map((k) => (k === 'A' ? seq.steps : seq.alt[k].steps)[0]), okL = firsts.filter((x) => x.status === 'approved').length;
+    const lets = [].concat(...varsOf(seq).map((k) => (k === 'A' ? seq.steps : seq.alt[k].steps))), okL = lets.filter((x) => x.status === 'approved').length;
+    const live = ui.run && ui.run.cid === c.id && ui.run.run && ui.run.run.status === 'active', ready = CLOUD && go > 0 && okL === lets.length && mbs.length > 0, busy = ui.run && ui.run.cid === c.id && ui.run.busy;
+    const fromNow = seq.from || primaryMailbox(co), prim = ((co && co.s.mailboxes) || []).find((m) => m.email === fromNow && m.primary) && s.coldSecondary;
     const li = (ok, text) => `<li class="${ok ? 'ok' : ''}">${ok ? '✓' : '○'} ${text}</li>`;
     const sum = t('sendSum').replace('{start}', s.start).replace('{step}', s.step).replace('{cap}', s.cap).replace('{a}', s.gapMin).replace('{b}', s.gapMax);
     return `<label class="fl"><span>${t('fromMailbox')}</span>${from}</label>
@@ -376,8 +407,12 @@
       <div class="sitebox"><div class="bh">${t('setSend')} · ${t('risk_' + s.level)}</div><p class="sub small">${sum}</p><button class="link small" data-act="sendOpen">${t('openRules')}</button></div>
       <div class="sitebox"><div class="bh">${t('readyTitle')}</div><ul class="ready">
         ${li(go > 0, `${t('readyWho')}: ${go}`)}${li(!unchecked, unchecked ? `${t('readyUnchecked')}: ${unchecked}` : t('readyChecked'))}
-        ${li(okL === firsts.length, `${t('readyLetters')}: ${okL} / ${firsts.length}`)}${li(mbs.length > 0, t('readyBox'))}${li(false, t('readyMail'))}</ul></div>
-      <div class="acts"><button class="btn" disabled>${t('startCampaign')}</button></div><p class="sub small">${t('startNote')}</p>`;
+        ${li(okL === lets.length, `${t('readyLetters')}: ${okL} / ${lets.length}`)}${li(mbs.length > 0, t('readyBox'))}</ul>
+        ${prim ? `<p class="sub small errc">${t('runPrimary').replace('{m}', esc(fromNow))}</p>` : ''}</div>
+      ${vRun(c)}
+      <div class="acts">${CLOUD ? '' : `<span class="sub small">${t('aiDemoOnly')}</span>`}<span class="grow"></span>
+        <button class="btn ${ui.runArm ? 'danger' : ''}" data-act="runStart" ${ready && !busy ? '' : 'disabled'}>${busy ? t('aiBusy') : ui.runArm ? t('startSure').replace('{n}', go).replace('{m}', esc(fromNow)) : t(live ? 'startMore' : 'startCampaign')}</button></div>
+      <p class="sub small">${t('startNote')}</p>`;
   }
   // Reads rows copied from a spreadsheet (tabs) or a CSV file (commas or semicolons, quotes allowed).
   function parseTable(text) {
@@ -476,7 +511,8 @@
         ${seq.split === 'role' ? `<label class="fl"><span>${t('whoFor')} ${k}</span><input class="in" data-seqwho placeholder="CEO, Owner, Founder" value="${esc(whoOf(seq, k))}"></label>` : '<span></span>'}</div>
         <p class="sub small">${t(seq.split === 'role' ? 'splitRoleNote' : 'splitEvenNote')}</p>
         <p class="sub small"><b>${t('variant')} ${k}:</b> ${esc((whoGets[k] || []).slice(0, 12).join(', ') || '—')}${(whoGets[k] || []).length > 12 ? ` … +${whoGets[k].length - 12}` : ''}</p>`}`;
-    const head2 = `<div class="row2 vset"><label class="fl"><span>${t('sendLang')}</span><select class="in" data-seqlang>${LANGS.map((l) => `<option value="${l}" ${seq.lang === l ? 'selected' : ''}>${esc(langName(l))}</option>`).join('')}</select></label><span></span></div>
+    const head2 = `<div class="row2 vset"><label class="fl"><span>${t('sendLang')}</span><select class="in" data-seqlang>${LANGS.map((l) => `<option value="${l}" ${seq.lang === l ? 'selected' : ''}>${esc(langName(l))}</option>`).join('')}</select></label>
+      <label class="fl"><span>${t('unitLabel')}</span><select class="in" data-sequnit>${['d', 'h', 'm'].map((u) => `<option value="${u}" ${(seq.unit || 'd') === u ? 'selected' : ''}>${t('unit_' + u)}</option>`).join('')}</select></label></div>
       ${seq.lang !== 'en' ? `<p class="sub small">${t('langNote').replace('{l}', langName(seq.lang))}</p>` : ''}`;
     const done = list.filter((x) => x.status === 'approved').length, smp = Object.assign({}, sampleFor(c), { signature: tailOf(c, v, co, seq.from || primaryMailbox(co)) });
     // AI buttons work only in the real program: the keys live on the server, the demo has none.
@@ -486,7 +522,7 @@
         ${diff ? `<small>${t('revSuggest')}</small>${r.subject ? `<b class="rs">${esc(r.subject)}</b>` : ''}<pre>${esc(r.body)}</pre>` : ''}
         <div class="acts tight">${diff ? `<button class="btn sm" data-act="seqApply" data-i="${i}">${t('revApply')}</button>` : ''}<button class="btn ghost sm" data-act="seqRevHide" data-i="${i}">${t('dismiss')}</button></div></div>`; };
     const steps = list.map((st, i) => { const mode = modeOf(st, k); return `<div class="step st-${st.status}" data-step="${i}"><div class="sth"><b>${t('letter')} ${k}${i + 1}</b>${i ? `<span class="ty">${t('ifSilent')}</span>` : ''}
-        <label class="dayl" title="${t('dayHint')}">${t('dayN')} <input class="in" type="number" min="0" data-seq="${i}|day" value="${+st.day || 0}" ${i === 0 ? 'disabled' : ''}></label>
+        <label class="dayl" title="${t('dayHint')}">${t('dayN_' + (seq.unit || 'd'))} <input class="in" type="number" min="0" data-seq="${i}|day" value="${+st.day || 0}" ${i === 0 ? 'disabled' : ''}></label>
         <span class="stt">${t('seq_' + st.status)}</span>${i > 0 && i === list.length - 1 ? `<button class="link" data-act="seqDel" data-i="${i}">×</button>` : ''}</div>
       <select class="in modesel" data-stepmode="${i}" title="${t('whoWrites')}">${['claude', 'gpt', 'manual'].map((m) => `<option value="${m}" ${mode === m ? 'selected' : ''}>${t('mode_' + m)}</option>`).join('')}</select>
       <input class="in" data-seq="${i}|subject" placeholder="${i ? t('subjectRe').replace('{k}', k) : t('subject')}" value="${esc(st.subject)}">
@@ -848,7 +884,8 @@
     moveCard(d) { const c = S.cards.find((x) => x.id === d.id), n = STAGES[stageIdx(c.stage) + +d.d]; if (n) { c.stage = n[0]; commit(); } },
     gotoStage(d) { const col = document.querySelector(`.col[data-stage="${d.stage}"]`); if (col) col.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' }); },
     wMove(d) { const i = S.widgets.indexOf(d.id), j = i + +d.d; if (i >= 0 && j >= 0 && j < S.widgets.length) { [S.widgets[i], S.widgets[j]] = [S.widgets[j], S.widgets[i]]; commit(); } },
-    ctab(d) { ui.ctab = d.v; ui.imp = null; ui.prev = -1; ui.delArm = false; render(); },
+    ctab(d) { ui.runArm = false; if (d.v === 'send' && CLOUD && cur() && cur().type === 'campaign') runPoll(ui.open);
+      ui.ctab = d.v; ui.imp = null; ui.prev = -1; ui.delArm = false; render(); },
     leadImport() { const el = document.querySelector('[data-leadpaste]'); if (el && el.value.trim()) importLeads(cur(), el.value); },
     siteGo() { runCheck(ui.open); },
     siteStop() { if (ui.site) ui.site.stop = true; render(); },
@@ -914,6 +951,17 @@
     toneToggle(d) { const s = curParam().s; s.tones = s.tones || []; const i = s.tones.indexOf(d.v); if (i < 0) s.tones.push(d.v); else s.tones.splice(i, 1); commit(); },
     vecOpt() { const v = S.vectors.find((x) => x.id === ui.edit.id), o = optOf(v); v.opt = { on: !o.on, text: o.text || OPT_TEXT + '\n' + ((item('company', v.company) || {}).name || '') }; commit(); },
     cardOpt() { const c = cur(), v = S.vectors.find((x) => x.id === c.vid); c.optOut = !optOn(c, v); commit(); },
+    // Starting sends real mail, so the button asks once more before it does.
+    runStart() {
+      const c = cur(); if (!CLOUD) return;
+      if (!ui.runArm) { ui.runArm = true; render(); return; }
+      ui.runArm = false; ui.run = { cid: c.id, busy: true }; if (c.stage === 'new') c.stage = 'contacted'; commit();
+      setTimeout(() => Cloud.fn('campaignStart', { cardId: c.id, tz: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' }, 130000)
+        .then(() => runPoll(c.id), (e) => { ui.run = { cid: c.id, err: runWhy(e) }; render(); }), 2200);
+    },
+    runStop() { const c = cur(); if (!ui.stopArm) { ui.stopArm = true; render(); setTimeout(() => { ui.stopArm = false; }, 6000); return; } ui.stopArm = false;
+      Cloud.fn('campaignStop', { cardId: c.id }).then(() => runPoll(c.id), (e) => { ui.err = runWhy(e); ui.errAi = true; render(); }); },
+    runRefresh() { runPoll(ui.open); },
     mbFoot(d) {
       const it = curParam(), m = it.s.mailboxes[+d.i]; m.footOn = !m.footOn;
       if (m.footOn && !m.foot) m.foot = 'Not relevant? Reply "no" and I will not write again.\n' + it.name;
@@ -1135,6 +1183,7 @@
     if (el.dataset.lemail) { const l = S.leads.find((x) => x.id === el.dataset.lemail), e = el.value.trim().toLowerCase(); if (l && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) { l.f.email = e; if (!CLOUD) l.okEmail = e; commit(); checkLeads(); } return; }
     if (el.dataset.stepmode && c) { stepsOf(c)[+el.dataset.stepmode].mode = el.value; commit(); return; }
     if (el.hasAttribute('data-seqlang') && c) { seqOf(c).lang = el.value; commit(); return; }
+    if (el.hasAttribute('data-sequnit') && c) { seqOf(c).unit = el.value; commit(); return; }
     // The slider loads a ready set of limits; each number can then be changed, but never past the red zone.
     if (el.hasAttribute('data-sendlevel')) { S.send.level = +el.value; Object.assign(S.send, RISK[S.send.level]); commit(); return; }
     if (el.dataset.send) {
