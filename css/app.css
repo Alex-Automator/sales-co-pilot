@@ -422,3 +422,4 @@ p.later{padding:22px 8px;color:var(--mut)}
 .seqhead{gap:12px}
 .modal{grid-template-columns:minmax(0,1fr) 340px}.mleft{min-width:0}.modal.wide{width:min(1240px,100%)}.ltable{max-width:100%}
 @media (max-width:700px){.modal{grid-template-columns:minmax(0,1fr)}}
+.okc{color:#0E7A49}.errc{color:#B3261E;white-space:normal}

@@ -274,4 +274,33 @@ async function find(fetchFn, keys, ctx) {
   return { companies: list.map((c, i) => ({ company: clean(c.company, 120), website: safeUrl(c.website).origin, country: clean(c.country, 60), why: clean(c.why, 240), emails: mails[i] })) };
 }
 
-module.exports = { MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };
+// ---------- Mail: sending through Gmail on behalf of a Workspace mailbox ----------
+const MAILER = 'vector-mailer@vector-sales-co-pilot.iam.gserviceaccount.com';
+const b64url = (x) => Buffer.from(x).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const mimeWord = (x) => (/^[\x20-\x7e]*$/.test(x) ? x : '=?UTF-8?B?' + Buffer.from(x).toString('base64') + '?=');
+// A plain-text letter in the form Gmail accepts.
+function rawMail({ from, to, subject, body }) {
+  const text = Buffer.from(String(body || '').replace(/\r?\n/g, '\r\n')).toString('base64').replace(/(.{76})/g, '$1\r\n');
+  return b64url([`From: ${from}`, `To: ${to}`, `Subject: ${mimeWord(String(subject || ''))}`, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', text].join('\r\n'));
+}
+// The server has no key of the mailer account. It asks Google to sign a short-lived request in the mailer's name
+// (allowed by the Token Creator role), and Google Workspace accepts it because of the domain-wide delegation.
+async function mailToken(fetchFn, mailbox, scope) {
+  const meta = await fetchFn('http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token', { headers: { 'Metadata-Flavor': 'Google' } });
+  if (!meta.ok) throw new Error('The server could not identify itself to Google');
+  const own = (await meta.json()).access_token, now = Math.floor(Date.now() / 1000);
+  const signed = await post(fetchFn, `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${MAILER}:signJwt`, { authorization: 'Bearer ' + own },
+    { payload: JSON.stringify({ iss: MAILER, sub: mailbox, scope, aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 600 }) });
+  const r = await fetchFn('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'grant_type=' + encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer') + '&assertion=' + encodeURIComponent(signed.signedJwt) });
+  const text = await r.text();
+  if (!r.ok) throw new Error('Google Workspace refused access to ' + mailbox + ': ' + text.slice(0, 240));
+  return JSON.parse(text).access_token;
+}
+async function sendMail(fetchFn, mail) {
+  const token = await mailToken(fetchFn, mail.from, 'https://www.googleapis.com/auth/gmail.send');
+  const d = await post(fetchFn, 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { authorization: 'Bearer ' + token }, { raw: rawMail(mail) });
+  return { id: d.id, threadId: d.threadId };
+}
+
+module.exports = { rawMail, sendMail, MAILER, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };

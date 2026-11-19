@@ -44,3 +44,14 @@ firebase deploy --only functions
 
 - Працюють лише користувачі зі схваленим доступом і лише для векторів, до яких вони мають доступ.
 - Не більше 150 звернень до AI на людину за добу (`LIMITS.perUserPerDay`).
+
+## Пошта (Gmail)
+
+Функція `mailTest` надсилає один тестовий лист зі скриньки компанії на адресу входу того, хто її викликав. Сервер не має ключа службового акаунта `vector-mailer`: він просить Google підписати короткочасний запит від імені цього акаунта, а Google Workspace приймає його завдяки domain-wide delegation.
+
+Разове налаштування в Cloud Shell:
+
+```
+gcloud services enable iamcredentials.googleapis.com gmail.googleapis.com --project vector-sales-co-pilot
+gcloud iam service-accounts add-iam-policy-binding vector-mailer@vector-sales-co-pilot.iam.gserviceaccount.com --member="serviceAccount:943187389377-compute@developer.gserviceaccount.com" --role="roles/iam.serviceAccountTokenCreator" --project vector-sales-co-pilot
+```

@@ -91,3 +91,27 @@ exports.find = onCall({ secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 300, memor
   try { return await lib.find(fetch, { claude: ANTHROPIC_API_KEY.value() }, Object.assign(await vectorCtx(v), { card: {}, request: d.request, n: d.n, skip: Array.isArray(d.skip) ? d.skip.slice(0, 200) : [] })); }
   catch (e) { console.error('find failed', e.message); throw new HttpsError('internal', e.message.slice(0, 300)); }
 });
+
+// mailTest({ company, email }) -> sends one test letter from that mailbox to the caller's own sign-in address.
+// It proves that the mail connection works for a mailbox; it cannot be used to write to anyone else.
+exports.mailTest = onCall({ timeoutSeconds: 60, memory: '256MiB' }, async (req) => {
+  if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+  const uid = req.auth.uid, to = req.auth.token.email, d = req.data || {};
+  if (!to) throw new HttpsError('failed-precondition', 'Your sign-in has no email address.');
+  const [user, meta, co] = await Promise.all([db().collection('users').doc(uid).get(), db().collection('meta').doc('app').get(), db().collection('params').doc(String(d.company || '-')).get()]);
+  if (!user.exists || !['admin', 'user'].includes(user.data().role)) throw new HttpsError('permission-denied', 'Your access is not approved yet.');
+  const box = co.exists ? ((co.data().s || {}).mailboxes || []).find((m) => m.email === d.email) : null;
+  if (!box) throw new HttpsError('not-found', 'This mailbox is not in the company settings (save the settings and try again).');
+  const superAdmin = meta.exists && meta.data().adminUid === uid;
+  if (!superAdmin && box.owner !== uid) throw new HttpsError('permission-denied', 'You can test only your own mailboxes.');
+  await countUse(uid, 'm', 30);
+  const sig = [box.sig, box.footOn && box.foot].filter(Boolean).join('\n\n');
+  try {
+    const r = await lib.sendMail(fetch, { from: box.email, to, subject: 'VECTOR: test letter from ' + box.email,
+      body: 'This is a test letter from VECTOR.\n\nIf you are reading it, the program can send mail from ' + box.email + '.\nЦе тестовий лист із VECTOR: надсилання з цієї скриньки працює.' + (sig ? '\n\n' + sig : '') });
+    return { ok: true, to, id: r.id };
+  } catch (e) {
+    console.error('mailTest failed', box.email, e.message);
+    throw new HttpsError('internal', e.message.slice(0, 400));
+  }
+});

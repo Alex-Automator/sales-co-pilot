@@ -518,6 +518,8 @@
     if (zone === 'company') {
       const boxes = (it.s.mailboxes || []).map((m, i) => (!manages(it) && !mineMb(m) ? '' : `<div class="mbx"><div class="lrow"><button class="radio ${m.primary ? 'on' : ''}" data-act="mbPrimary" data-i="${i}" title="${t('primary')}"></button>
         <span class="lt">${esc(m.email)}${CLOUD && m.owner !== au.uid ? ` <small class="ownr">${esc(userName(m.owner))}</small>` : ''}</span>${m.primary ? `<span class="ty">${t('primary')}</span>` : ''}<button class="link" data-act="mbRemove" data-i="${i}">×</button></div>
+        <div class="acts tight"><button class="btn ghost sm" data-act="mbTest" data-i="${i}" ${CLOUD && !ui.mbBusy ? '' : 'disabled'} title="${CLOUD ? t('mbTestHint') : t('aiDemoOnly')}">${ui.mbBusy === m.email ? t('aiBusy') : t('mbTest')}</button>
+          ${ui.mbRes && ui.mbRes.email === m.email ? `<span class="sub small ${ui.mbRes.ok ? 'okc' : 'errc'}">${esc(ui.mbRes.text)}</span>` : ''}</div>
         <textarea class="in" rows="3" data-mbsig="${i}" placeholder="${t('mbSignature')}">${esc(m.sig || '')}</textarea>
         ${m.sig ? '' : `<button class="link small" data-act="mbSigPlain" data-i="${i}">${t('sigPlain')}</button>`}
         <button class="tog" data-act="mbFoot" data-i="${i}"><span class="sw ${m.footOn ? 'on' : ''}"><i></i></span><span>${t('footOn')}<small>${t('footHint')}</small></span></button>
@@ -914,6 +916,14 @@
       if (S.draft[e.zone] === e.id) delete S.draft[e.zone]; ui.edit = null; commit();
     },
     rmImg() { curParam().img = ''; commit(); },
+    // Sends a test letter from this mailbox to the person's own sign-in address. Settings are saved first so the server sees the mailbox.
+    mbTest(d) {
+      const it = curParam(), m = it.s.mailboxes[+d.i]; if (ui.mbBusy || !CLOUD) return;
+      ui.mbBusy = m.email; ui.mbRes = null; commit();
+      setTimeout(() => Cloud.mailTest({ company: it.id, email: m.email })
+        .then((r) => { ui.mbBusy = ''; ui.mbRes = { email: m.email, ok: true, text: t('mbTestOk') + ' ' + r.to }; render(); },
+          (e) => { ui.mbBusy = ''; ui.mbRes = { email: m.email, ok: false, text: String(e && e.message || e) }; render(); }), 1800);
+    },
     mbSigPlain(d) {
       const it = curParam(), m = it.s.mailboxes[+d.i], site = String(it.s.website || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
       m.sig = [S.user.name, it.name, site].filter(Boolean).join('\n'); commit();
