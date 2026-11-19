@@ -56,6 +56,9 @@ function draftPrompt(ctx) {
   } else {
     user += `TASK\nWrite the first letter of this campaign. At most ${LIMITS.first} words in the body. Subject: three to six words, lower-key, no clickbait.\n\n`;
   }
+  // Without knowing what is offered a truthful letter cannot be written: the AI then asks instead of inventing.
+  const lang = ctx.ui === 'uk' ? 'Ukrainian' : 'English';
+  user += `If the brief does not say what the sender offers and why this recipient should care, do not invent it. Reply instead with JSON only: {"need": ["up to three short questions in ${lang} whose answers would let you write the letter"]}\nOtherwise: `;
   return { system, user: user + JSON_LETTER };
 }
 
@@ -123,6 +126,7 @@ async function run(fetchFn, keys, ctx) {
   const p = ctx.op === 'review' ? reviewPrompt(ctx) : ctx.op === 'polish' ? polishPrompt(ctx) : ctx.op === 'revise' ? revisePrompt(ctx) : draftPrompt(ctx);
   const text = ctx.engine === 'gpt' ? await askGpt(fetchFn, keys.gpt, p) : await askClaude(fetchFn, keys.claude, p);
   const o = parseJson(text);
+  if (ctx.op === 'draft' && Array.isArray(o.need) && o.need.length && !clean(o.body)) return { need: o.need.slice(0, 3).map((x) => clean(x, 240)), engine: ctx.engine };
   if (ctx.op !== 'review') return Object.assign(letterOf(o), { engine: ctx.engine });
   return Object.assign(letterOf(o), { ok: o.ok === true, issues: (Array.isArray(o.issues) ? o.issues : []).slice(0, 5).map((x) => clean(x, 300)), engine: ctx.engine });
 }

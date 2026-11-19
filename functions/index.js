@@ -54,7 +54,7 @@ exports.ai = onCall({ secrets: [ANTHROPIC_API_KEY, OPENAI_API_KEY], timeoutSecon
   if (d.op === 'draft' && ctx.step > 0 && !String(first.body || '').trim()) throw new HttpsError('failed-precondition', 'Write the first letter of this variant before its reminders.');
 
   try {
-    return await lib.run(fetch, { claude: ANTHROPIC_API_KEY.value(), gpt: OPENAI_API_KEY.value() }, ctx);
+    return await lib.run(fetch, { claude: ANTHROPIC_API_KEY.value().trim(), gpt: OPENAI_API_KEY.value().trim() }, ctx);
   } catch (e) {
     console.error('ai failed', d.op, d.engine, e.message);
     throw new HttpsError('internal', e.message.slice(0, 300));
@@ -80,7 +80,7 @@ exports.criterion = onCall({ secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 60, m
     const g = await guard(req); uid = g.uid; ctx = Object.assign(await vectorCtx(g.v), { card: {} });
   }
   await countUse(uid, 'n', lib.LIMITS.perUserPerDay);
-  try { return await lib.criterion(fetch, ANTHROPIC_API_KEY.value(), ctx); }
+  try { return await lib.criterion(fetch, ANTHROPIC_API_KEY.value().trim(), ctx); }
   catch (e) { console.error('criterion failed', e.message); throw new HttpsError('internal', e.message.slice(0, 300)); }
 });
 
@@ -89,7 +89,7 @@ exports.research = onCall({ secrets: [ANTHROPIC_API_KEY, OPENAI_API_KEY], timeou
   const { uid, d } = await guard(req);
   await countUse(uid, 'r', lib.LIMITS.researchPerUserPerDay);
   try {
-    return await lib.research(fetch, { claude: ANTHROPIC_API_KEY.value(), gpt: OPENAI_API_KEY.value() }, { website: d.website, company: d.company, criterion: d.criterion, terms: d.terms });
+    return await lib.research(fetch, { claude: ANTHROPIC_API_KEY.value().trim(), gpt: OPENAI_API_KEY.value().trim() }, { website: d.website, company: d.company, criterion: d.criterion, terms: d.terms });
   } catch (e) {
     console.error('research failed', d.website, e.message);
     return { s: 'unsure', ev: ('The check failed: ' + e.message).slice(0, 240), proj: '', url: '', by: '' };
@@ -101,7 +101,7 @@ exports.find = onCall({ secrets: [ANTHROPIC_API_KEY], timeoutSeconds: 300, memor
   const { uid, d, v } = await guard(req);
   if (!String(d.request || '').trim()) throw new HttpsError('invalid-argument', 'Describe which companies to look for.');
   await countUse(uid, 'f', 20);
-  try { return await lib.find(fetch, { claude: ANTHROPIC_API_KEY.value() }, Object.assign(await vectorCtx(v), { card: {}, request: d.request, n: d.n, skip: Array.isArray(d.skip) ? d.skip.slice(0, 200) : [] })); }
+  try { return await lib.find(fetch, { claude: ANTHROPIC_API_KEY.value().trim() }, Object.assign(await vectorCtx(v), { card: {}, request: d.request, n: d.n, skip: Array.isArray(d.skip) ? d.skip.slice(0, 200) : [] })); }
   catch (e) { console.error('find failed', e.message); throw new HttpsError('internal', e.message.slice(0, 300)); }
 });
 

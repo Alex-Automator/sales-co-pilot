@@ -280,6 +280,16 @@
     for (let i = 0, n = ui.site.live; i < n; i++) next();
   }
   // Asks the server for one letter. The answer may arrive after the data was refreshed from the cloud, so the letter is found again by its ids.
+  // Turns the commonest server errors into plain words with the next step.
+  function aiWhy(e) {
+    const m = String(e && e.message ? e.message : e);
+    if (/401|authentication|invalid x-api-key|Incorrect API key/i.test(m)) return t(/anthropic/i.test(m) ? 'errKeyClaude' : 'errKeyGpt') + ' ' + t('errKeyFix');
+    if (/credit balance|insufficient_quota|billing|402/i.test(m)) return t(/anthropic/i.test(m) ? 'errMoneyClaude' : 'errMoneyGpt');
+    if (/not_found_error|model.*(not exist|not found)|404/i.test(m)) return t('errModel') + ' ' + m;
+    if (/429|rate.?limit|overloaded|529/i.test(m)) return t('errBusy');
+    if (/NOT_FOUND|not-found|internal$/i.test(m) && !/api\./.test(m)) return t('errDeploy') + ' ' + m;
+    return m;
+  }
   function aiRun(cid, k, i, op, eng, comment) {
     const c = S.cards.find((x) => x.id === cid), q = seqOf(c), list = k === 'A' ? q.steps : q.alt[k].steps, st = list[i], f = c.f || {};
     if (ui.busy || !CLOUD) return Promise.reject(new Error('busy'));
@@ -291,10 +301,12 @@
         checkQ: S.leads.some((l) => l.cid === cid && (chkOf(l, critOf(c)) || {}).s === 'yes') ? critOf(c) : '' } })
       .then((r) => {
         ui.busy = ''; const s2 = find(); if (!s2) { render(); return; }
+        if (r.need) { s2.need = r.need; commit(); return; }
+        s2.need = null;
         if (op === 'review') { s2.review = { ok: !!r.ok, issues: r.issues || [], subject: r.subject || '', body: r.body || '', by: r.engine }; if (r.ok && s2.status === 'draft') s2.status = 'reviewed'; }
         else { s2.subject = i > 0 ? (op === 'draft' ? '' : s2.subject) : r.subject || s2.subject; s2.body = r.body; s2.status = 'draft'; s2.by = r.engine; s2.review = null; }
         commit();
-      }, (e) => { ui.busy = ''; ui.err = String(e && e.message ? e.message : e); ui.errAi = true; render(); throw e; });
+      }, (e) => { ui.busy = ''; ui.err = aiWhy(e); ui.errAi = true; render(); throw e; });
   }
   function vCriterion(c, all) {
     const k = checkCfg(c), crit = k.crit || '';
@@ -482,11 +494,16 @@
         <button class="btn ghost sm" data-act="seqPreview" data-i="${i}">${t('preview')}</button>
         <button class="btn sm" data-act="seqApprove" data-i="${i}" ${st.status === 'approved' || stepReady(st, i) ? '' : 'disabled'}>${st.status === 'approved' ? t('unapprove') : t('approve')}</button></div>
       <div class="acts tight cmt"><input class="in grow" data-cmt="${i}" placeholder="${t('cmtPh')}" ${CLOUD ? '' : 'disabled'}>${aiBtn(i, 'revise', mode === 'gpt' ? 'gpt' : 'claude', t('cmtGo'), !st.body.trim())}</div>
+      ${st.need && st.need.length ? `<div class="revbox"><b>${t('needTitle')}</b><ul>${st.need.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
+        <textarea class="in" rows="3" data-needans="${i}" placeholder="${t('needPh')}"></textarea>
+        <div class="acts tight"><button class="btn sm" data-act="needGo" data-i="${i}" ${ui.busy ? 'disabled' : ''}>${t('needGo')}</button><button class="btn ghost sm" data-act="needHide" data-i="${i}">${t('dismiss')}</button></div><small>${t('needNote')}</small></div>` : ''}
       ${revBox(st, i)}${ui.prev === i ? `<div class="prevbox"><small>${t('previewFor')} ${esc([smp.firstName, smp.lastName].filter(Boolean).join(' '))}</small><b>${esc(fillVars(st.subject || 'Re: ' + list[0].subject, smp))}</b><pre>${esc(fillVars(withSig(st.body, smp.signature), smp))}</pre></div>` : ''}</div>`; }).join('');
+    const tp = topicOf(c), bs = (tp && tp.s) || {}, thin = !String(bs.offer || '').trim() && !String(bs.hook || '').trim() && !String(c.notes || '').trim();
+    const briefHint = thin ? `<div class="revbox"><b>${t('thinTitle')}</b><small>${t('thinNote')}</small>${tp ? `<div class="acts tight"><button class="btn sm" data-act="editParam" data-zone="topic" data-id="${tp.id}">${t('thinOpen')}</button></div>` : ''}</div>` : '';
     const camp = c.type === 'campaign', will = camp ? S.leads.filter((l) => l.cid === c.id && sendable(l)).length : 0;
     return `<div class="seqhead">${camp ? `<span class="sub small">${t('willGet')}: ${will}</span><button class="btn ghost sm" data-act="seqAuto" ${CLOUD && !ui.busy ? '' : 'disabled'} title="${CLOUD ? t('seqAutoHint') : t('aiDemoOnly')}">${ui.auto ? t('aiBusy') + ' ' + ui.auto : t('seqAuto')}</button>`
       : `<label class="fromf"><span>${t('fromMailbox')}</span>${from}</label>`}<span class="ty">${done} / ${list.length} ${t('approvedOf')}</span></div>
-      ${head2}${vtabs}${steps}${list.length < 5 ? `<button class="add" data-act="seqAdd">+ ${t('letter')} ${k}${list.length + 1} · ${t('addFollow')}</button>` : ''}<p class="sub small">${t('chainNote')} ${t('seqNote')}</p>`;
+      ${briefHint}${head2}${vtabs}${steps}${list.length < 5 ? `<button class="add" data-act="seqAdd">+ ${t('letter')} ${k}${list.length + 1} · ${t('addFollow')}</button>` : ''}<p class="sub small">${t('chainNote')} ${t('seqNote')}</p>`;
   }
 
   function vCardModal() {
@@ -900,6 +917,14 @@
     },
     seqApprove(d) { const st = stepsOf(cur())[+d.i]; st.status = st.status === 'approved' ? 'draft' : 'approved'; commit(); },
     aiGo(d) { const el = document.querySelector(`[data-cmt="${d.i}"]`); aiRun(ui.open, curVar(seqOf(cur())), +d.i, d.op, d.eng, el ? el.value : '').catch(() => {}); },
+    // The answers go into the notes of the card, which are part of what AI reads; then the letter is asked for again.
+    needGo(d) {
+      const c = cur(), q = seqOf(c), k = curVar(q), st = stepsOf(c)[+d.i], el = document.querySelector(`[data-needans="${d.i}"]`), a = el ? el.value.trim() : '';
+      if (!a) { ui.err = t('needEmpty'); ui.errAi = true; render(); return; }
+      c.notes = [c.notes, (st.need || []).map((x) => '- ' + x).join('\n'), a].filter((x) => String(x || '').trim()).join('\n'); st.need = null; commit();
+      const m = modeOf(st, k); setTimeout(() => aiRun(c.id, k, +d.i, 'draft', m === 'gpt' ? 'gpt' : 'claude', '').catch(() => {}), 1500);
+    },
+    needHide(d) { stepsOf(cur())[+d.i].need = null; commit(); },
     seqApply(d) { const st = stepsOf(cur())[+d.i], r = st.review; if (!r) return; st.subject = r.subject; st.body = r.body; st.status = 'reviewed'; st.review = null; commit(); },
     seqRevHide(d) { stepsOf(cur())[+d.i].review = null; commit(); },
     seqPreview(d) { ui.prev = ui.prev === +d.i ? -1 : +d.i; render(); },
@@ -1062,7 +1087,7 @@
     if (el.dataset.crit && c) { const e = checkCfg(c), k = c.check = { crit: e.crit, tag: e.tag, terms: e.terms }; if (el.dataset.crit === 'terms') k.terms = termList(el.value); else if (el.dataset.crit === 'tag') k.tag = tagOf(el.value); else k.crit = el.value; save(); return; }
     if (el.hasAttribute('data-findq')) { ui.findq = el.value; return; }
     if (el.hasAttribute('data-vopt') && ui.edit) { const v = S.vectors.find((x) => x.id === ui.edit.id); v.opt = { on: true, text: el.value }; save(); return; }
-    if (el.hasAttribute('data-cmt') || el.dataset.lemail) return;
+    if (el.hasAttribute('data-cmt') || el.dataset.lemail || el.dataset.needans) return;
     if (el.hasAttribute('data-seqwho') && c) { const q = seqOf(c), k = curVar(q); if (k === 'A') q.whoA = el.value; else q.alt[k].who = el.value; save(); return; }
     if (el.dataset.seq && c) {
       const [i, k] = el.dataset.seq.split('|'), st = stepsOf(c)[+i]; st[k] = k === 'day' ? Math.max(0, +el.value || 0) : el.value;
