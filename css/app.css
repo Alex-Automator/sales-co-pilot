@@ -423,3 +423,4 @@ p.later{padding:22px 8px;color:var(--mut)}
 .modal{grid-template-columns:minmax(0,1fr) 340px}.mleft{min-width:0}.modal.wide{width:min(1240px,100%)}.ltable{max-width:100%}
 @media (max-width:700px){.modal{grid-template-columns:minmax(0,1fr)}}
 .okc{color:#0E7A49}.errc{color:#B3261E;white-space:normal}
+.sigh{margin-top:8px}.sigh summary{cursor:pointer;font-size:12.5px;color:var(--acctx)}.in.mono{font-family:ui-monospace,Menlo,monospace;font-size:11.5px}.sigprev{width:100%;height:110px;border:1px solid var(--line);border-radius:8px;margin-top:8px;background:#fff}

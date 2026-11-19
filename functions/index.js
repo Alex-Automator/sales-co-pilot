@@ -105,10 +105,10 @@ exports.mailTest = onCall({ timeoutSeconds: 60, memory: '256MiB' }, async (req) 
   const superAdmin = meta.exists && meta.data().adminUid === uid;
   if (!superAdmin && box.owner !== uid) throw new HttpsError('permission-denied', 'You can test only your own mailboxes.');
   await countUse(uid, 'm', 30);
-  const sig = [box.sig, box.footOn && box.foot].filter(Boolean).join('\n\n');
+  const sig = box.sig || '';
   try {
-    const r = await lib.sendMail(fetch, { from: box.email, to, subject: 'VECTOR: test letter from ' + box.email,
-      body: 'This is a test letter from VECTOR.\n\nIf you are reading it, the program can send mail from ' + box.email + '.\nЦе тестовий лист із VECTOR: надсилання з цієї скриньки працює.' + (sig ? '\n\n' + sig : '') });
+    const r = await lib.sendMail(fetch, { from: box.email, to, sigHtml: box.sigHtml || '', subject: 'VECTOR: test letter from ' + box.email,
+      sig, body: 'This is a test letter from VECTOR.\n\nIf you are reading it, the program can send mail from ' + box.email + '.\nЦе тестовий лист із VECTOR: надсилання з цієї скриньки працює.' });
     return { ok: true, to, id: r.id };
   } catch (e) {
     console.error('mailTest failed', box.email, e.message);

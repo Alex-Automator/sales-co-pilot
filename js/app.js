@@ -370,6 +370,7 @@
     if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
     return rows.filter((r) => r.some((x) => x.trim() !== ''));
   }
+  const FREE_MAIL = /^(gmail|googlemail|outlook|hotmail|live|msn|icloud|me|mac|aol|proton|protonmail|pm|gmx|mail|zoho|yandex|ya|ukr|i|meta|bigmir|email|inbox|fastmail|hey|tutanota|tuta|yahoo|ymail|rambler|bk|list)\.[a-z.]+$/i;
   function importLeads(c, text) {
     const rows = parseTable(text), norm = (h) => String(h).toLowerCase().replace(/[^a-z]/g, '');
     let hi = -1, map = null;
@@ -377,7 +378,13 @@
       const m = {}; rows[i].forEach((h, j) => { const n = norm(h); Object.keys(LEAD_COLS).forEach((k) => { if (!(k in m) && LEAD_COLS[k].includes(n)) m[k] = j; }); });
       if ('email' in m) { hi = i; map = m; }
     }
-    if (hi < 0) { ui.imp = { err: 'needHeader' }; render(); return; }
+    // No header row: the shortest form is accepted too, one person per line, a name and an address in any order.
+    if (hi < 0) {
+      const simple = String(text).split(/\r?\n/).map((ln) => { const m = ln.match(/[^\s<>,;"'()]+@[^\s<>,;"'()]+\.[^\s<>,;"'()]+/); if (!m) return null;
+        const name = ln.replace(m[0], ' ').replace(/[<>,;"'()\t]+/g, ' ').replace(/\s+/g, ' ').trim().split(' '); return [name[0] || '', name.slice(1).join(' '), m[0].replace(/[.]+$/, '')]; }).filter(Boolean);
+      if (!simple.length) { ui.imp = { err: 'needHeader' }; render(); return; }
+      rows.length = 0; simple.forEach((r) => rows.push(r)); map = { firstName: 0, lastName: 1, email: 2 }; hi = -1;
+    }
     const v = S.vectors.find((x) => x.id === c.vid), company = v ? v.company : (c.vec || {}).company;
     const seen = {}; S.leads.forEach((l) => { if (l.company === company) seen[l.f.email] = 1; });
     S.cards.forEach((k) => { const e = String(k.f.email || '').trim().toLowerCase(); if (k.type === 'contact' && e && (k.vec || {}).company === company) seen[e] = 1; });
@@ -388,6 +395,8 @@
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email)) { res.bad++; return; }
       if (seen[f.email]) { res.dup++; return; }
       seen[f.email] = 1; res.added++;
+      // A company address tells us the company's site; free mail services tell us nothing.
+      const dom = f.email.split('@')[1]; if (!f.website && !FREE_MAIL.test(dom)) f.website = 'https://' + dom;
       S.leads.push({ id: uid('L'), cid: c.id, vid: c.vid, company, owner: au.uid, acl: (c.acl || []).slice(), ord: n++, f, blocked: '', okEmail: CLOUD ? '' : f.email });
     });
     ui.imp = res; if (res.added) { ui.ctab = 'recipients'; ui.rf = 'all'; if (!critOf(c)) critSuggest(c.id); } commit(); checkLeads();
@@ -527,6 +536,9 @@
         <div class="acts tight"><button class="btn ghost sm" data-act="mbTest" data-i="${i}" ${CLOUD && !ui.mbBusy ? '' : 'disabled'} title="${CLOUD ? t('mbTestHint') : t('aiDemoOnly')}">${ui.mbBusy === m.email ? t('aiBusy') : t('mbTest')}</button>
           ${ui.mbRes && ui.mbRes.email === m.email ? `<span class="sub small ${ui.mbRes.ok ? 'okc' : 'errc'}">${esc(ui.mbRes.text)}</span>` : ''}</div>
         <textarea class="in" rows="3" data-mbsig="${i}" placeholder="${t('mbSignature')}">${esc(m.sig || '')}</textarea>
+        <details class="sigh" ${m.sigHtml || ui.sigOpen === m.email ? 'open' : ''}><summary>${t('sigHtml')}</summary><p class="sub small">${t('sigHtmlNote')}</p>
+          <textarea class="in mono" rows="4" data-mbsightml="${i}" placeholder="<table>…</table>">${esc(m.sigHtml || '')}</textarea>
+          ${m.sigHtml ? `<iframe class="sigprev" sandbox srcdoc="${esc('<body style="margin:8px;background:#fff">' + m.sigHtml + '</body>')}"></iframe>` : ''}</details>
         ${m.sig ? '' : `<button class="link small" data-act="mbSigPlain" data-i="${i}">${t('sigPlain')}</button>`}
         </div>`)).join('');
       return sIn(it, 'website', t('website')) + `<div class="fl"><span>${t('mailboxes')}</span>${boxes}<input class="in" data-listadd="mailboxes" placeholder="${t('addMailbox')}"><p class="sub small">${t('sigHint')}</p></div>`;
@@ -1043,6 +1055,7 @@
     if (el.dataset.u) { S.user[el.dataset.u] = el.value; save(); return; }
     if (el.dataset.lgname) { legendOf(el.dataset.lgname).label = el.value; save(); return; }
     if (el.dataset.lgcolor) { legendOf(el.dataset.lgcolor).color = el.value; save(); return; }
+    if (p && el.dataset.mbsightml) { const m = p.s.mailboxes[+el.dataset.mbsightml]; m.sigHtml = el.value.slice(0, 80000); ui.sigOpen = m.email; save(); return; }
     if (p && el.dataset.mbfoot) { p.s.mailboxes[+el.dataset.mbfoot].foot = el.value; save(); return; }
     if (p && el.dataset.mbsig) { p.s.mailboxes[+el.dataset.mbsig].sig = el.value; save(); return; }
     if (p && el.dataset.s) { p.s[el.dataset.s] = el.value; save(); return; }
@@ -1062,6 +1075,7 @@
     if (el.hasAttribute('data-seqsplit') && c) { seqOf(c).split = el.value; commit(); return; }
     if (el.hasAttribute('data-seqwho') && c) { render(); return; }
     if (el.dataset.crit && c) { render(); return; }
+    if (el.dataset.mbsightml) { render(); return; }
     if (el.dataset.lemail) { const l = S.leads.find((x) => x.id === el.dataset.lemail), e = el.value.trim().toLowerCase(); if (l && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) { l.f.email = e; if (!CLOUD) l.okEmail = e; commit(); checkLeads(); } return; }
     if (el.dataset.stepmode && c) { stepsOf(c)[+el.dataset.stepmode].mode = el.value; commit(); return; }
     if (el.hasAttribute('data-seqlang') && c) { seqOf(c).lang = el.value; commit(); return; }

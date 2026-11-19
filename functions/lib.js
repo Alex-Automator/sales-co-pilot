@@ -278,10 +278,37 @@ async function find(fetchFn, keys, ctx) {
 const MAILER = 'vector-mailer@vector-sales-co-pilot.iam.gserviceaccount.com';
 const b64url = (x) => Buffer.from(x).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const mimeWord = (x) => (/^[\x20-\x7e]*$/.test(x) ? x : '=?UTF-8?B?' + Buffer.from(x).toString('base64') + '?=');
-// A plain-text letter in the form Gmail accepts.
-function rawMail({ from, to, subject, body, replyTo }) {
-  const text = Buffer.from(String(body || '').replace(/\r?\n/g, '\r\n')).toString('base64').replace(/(.{76})/g, '$1\r\n');
-  return b64url([`From: ${from}`, `To: ${to}`, `Subject: ${mimeWord(String(subject || ''))}`].concat(replyTo ? [`In-Reply-To: ${replyTo}`, `References: ${replyTo}`] : []).concat(['MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', text]).join('\r\n'));
+const b64lines = (x) => Buffer.from(x).toString('base64').replace(/(.{76})/g, '$1\r\n');
+const escHtml = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+// An HTML signature as the user pasted it: only the inside of <body>, no scripts, no event handlers.
+function cleanSig(html) {
+  let h = String(html || '').slice(0, 80000); const m = h.match(/<body[^>]*>([\s\S]*?)<\/body>/i); if (m) h = m[1];
+  return h.replace(/<(script|style|iframe|object|embed|form)\b[\s\S]*?<\/\1\s*>/gi, '').replace(/<\/?(script|style|iframe|object|embed|form|link|meta|base)\b[^>]*>/gi, '').replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '').replace(/javascript:/gi, '').trim();
+}
+// Pictures embedded in the signature as data: addresses travel as inline attachments, because Gmail does not show data: pictures.
+function inlineImages(html) {
+  const images = [];
+  const out = html.replace(/src\s*=\s*(["'])data:(image\/(?:png|jpe?g|gif));base64,([A-Za-z0-9+/=\s]+?)\1/gi, (m, q, type, data) => {
+    if (images.length >= 4) return 'src=""'; images.push({ type: type.toLowerCase(), data: data.replace(/\s+/g, ''), cid: `sig${images.length + 1}@vector` });
+    return `src="cid:${images[images.length - 1].cid}"`;
+  });
+  return { html: out, images };
+}
+// A letter in the form Gmail accepts: plain text, or plain text plus an HTML version when the mailbox has an HTML signature.
+// body is the letter itself; sig is the plain signature (and opt-out line); sigHtml replaces sig in the HTML version.
+function rawMail({ from, to, subject, body, sig, sigHtml }) {
+  const head = [`From: ${from}`, `To: ${to}`, `Subject: ${mimeWord(String(subject || ''))}`, 'MIME-Version: 1.0'];
+  const text = [String(body || '').replace(/\s+$/, ''), String(sig || '').trim()].filter(Boolean).join('\n\n').replace(/\r?\n/g, '\r\n'), plain = ['Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', b64lines(text)];
+  const hsig = cleanSig(sigHtml);
+  if (!hsig) return b64url(head.concat(plain).join('\r\n'));
+  const { html, images } = inlineImages(hsig), id = Date.now().toString(36), A = 'vecA' + id, R = 'vecR' + id;
+  const page = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#222222;">${escHtml(String(body || '').replace(/\s+$/, '')).replace(/\r?\n/g, '<br>')}</div><br>${html}`;
+  const alt = [`Content-Type: multipart/alternative; boundary="${A}"`, '', '--' + A].concat(plain, ['--' + A, 'Content-Type: text/html; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', b64lines(page), '--' + A + '--']);
+  if (!images.length) return b64url(head.concat(alt).join('\r\n'));
+  const parts = [`Content-Type: multipart/related; boundary="${R}"`, '', '--' + R].concat(alt);
+  images.forEach((im, i) => parts.push('--' + R, `Content-Type: ${im.type}; name="signature${i + 1}.${im.type.split('/')[1]}"`, 'Content-Transfer-Encoding: base64', `Content-ID: <${im.cid}>`, `Content-Disposition: inline; filename="signature${i + 1}.${im.type.split('/')[1]}"`, '', im.data.replace(/(.{76})/g, '$1\r\n')));
+  parts.push('--' + R + '--');
+  return b64url(head.concat(parts).join('\r\n'));
 }
 // The server has no key of the mailer account. It asks Google to sign a short-lived request in the mailer's name
 // (allowed by the Token Creator role), and Google Workspace accepts it because of the domain-wide delegation.
