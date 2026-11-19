@@ -381,7 +381,7 @@
     // No header row: the shortest form is accepted too, one person per line, a name and an address in any order.
     if (hi < 0) {
       const simple = String(text).split(/\r?\n/).map((ln) => { const m = ln.match(/[^\s<>,;"'()]+@[^\s<>,;"'()]+\.[^\s<>,;"'()]+/); if (!m) return null;
-        const name = ln.replace(m[0], ' ').replace(/[<>,;"'()\t]+/g, ' ').replace(/\s+/g, ' ').trim().split(' '); return [name[0] || '', name.slice(1).join(' '), m[0].replace(/[.]+$/, '')]; }).filter(Boolean);
+        const name = ln.replace(m[0], ' ').replace(/[<>,;"'()\t|:]+/g, ' ').replace(/(^|\s)[-–—]+(?=\s|$)/g, ' ').replace(/\s+/g, ' ').trim().split(' '); return [name[0] || '', name.slice(1).join(' '), m[0].replace(/[.]+$/, '')]; }).filter(Boolean);
       if (!simple.length) { ui.imp = { err: 'needHeader' }; render(); return; }
       rows.length = 0; simple.forEach((r) => rows.push(r)); map = { firstName: 0, lastName: 1, email: 2 }; hi = -1;
     }
