@@ -538,6 +538,7 @@
         <textarea class="in" rows="3" data-mbsig="${i}" placeholder="${t('mbSignature')}">${esc(m.sig || '')}</textarea>
         <details class="sigh" ${m.sigHtml || ui.sigOpen === m.email ? 'open' : ''}><summary>${t('sigHtml')}</summary><p class="sub small">${t('sigHtmlNote')}</p>
           <textarea class="in mono" rows="4" data-mbsightml="${i}" placeholder="<table>…</table>">${esc(m.sigHtml || '')}</textarea>
+          <div class="acts tight"><label class="btn ghost sm filebtn">${t('sigFile')}<input type="file" accept=".html,.htm,.txt,text/html,text/plain" data-mbsigfile="${i}" hidden></label>${m.sigHtml ? `<button class="link small" data-act="mbSigClear" data-i="${i}">${t('sigClear')}</button>` : ''}</div>
           ${m.sigHtml ? `<iframe class="sigprev" sandbox srcdoc="${esc('<body style="margin:8px;background:#fff">' + m.sigHtml + '</body>')}"></iframe>` : ''}</details>
         ${m.sig ? '' : `<button class="link small" data-act="mbSigPlain" data-i="${i}">${t('sigPlain')}</button>`}
         </div>`)).join('');
@@ -946,6 +947,7 @@
         .then((r) => { ui.mbBusy = ''; ui.mbRes = { email: m.email, ok: true, text: t('mbTestOk') + ' ' + r.to }; render(); },
           (e) => { ui.mbBusy = ''; ui.mbRes = { email: m.email, ok: false, text: String(e && e.message || e) }; render(); }), 1800);
     },
+    mbSigClear(d) { const m = curParam().s.mailboxes[+d.i]; m.sigHtml = ''; ui.sigOpen = m.email; commit(); },
     mbSigPlain(d) {
       const it = curParam(), m = it.s.mailboxes[+d.i], site = String(it.s.website || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
       m.sig = [S.user.name, it.name, site].filter(Boolean).join('\n'); commit();
@@ -1076,6 +1078,11 @@
     if (el.hasAttribute('data-seqwho') && c) { render(); return; }
     if (el.dataset.crit && c) { render(); return; }
     if (el.dataset.mbsightml) { render(); return; }
+    if (el.dataset.mbsigfile && el.files && el.files[0]) {
+      const it = curParam(), i = +el.dataset.mbsigfile, rd = new FileReader();
+      rd.onload = () => { const m = it.s.mailboxes[i]; m.sigHtml = String(rd.result || '').slice(0, 80000); ui.sigOpen = m.email; commit(); };
+      rd.readAsText(el.files[0]); return;
+    }
     if (el.dataset.lemail) { const l = S.leads.find((x) => x.id === el.dataset.lemail), e = el.value.trim().toLowerCase(); if (l && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) { l.f.email = e; if (!CLOUD) l.okEmail = e; commit(); checkLeads(); } return; }
     if (el.dataset.stepmode && c) { stepsOf(c)[+el.dataset.stepmode].mode = el.value; commit(); return; }
     if (el.hasAttribute('data-seqlang') && c) { seqOf(c).lang = el.value; commit(); return; }
