@@ -49,7 +49,12 @@
   // A mailbox belongs to the operator who added it; operators see and use only their own, the admin sees all.
   const mineMb = (m) => (m.owner || '') === au.uid || (!CLOUD);
   // The signature of a mailbox, with its opt-out line and company details when those are switched on.
-  const sigOf = (co, email) => { const m = ((co && co.s.mailboxes) || []).find((x) => x.email === email) || {}; return [m.sig, m.footOn && m.foot].filter(Boolean).join('\n\n'); };
+  const sigOf = (co, email) => (((co && co.s.mailboxes) || []).find((x) => x.email === email) || {}).sig || '';
+  // The opt-out line is a setting of the vector (the default for its cards); a campaign card may switch it for itself.
+  const OPT_TEXT = 'Not relevant? Reply "no" and I will not write again.';
+  const optOf = (v) => (v && v.opt) || { on: false, text: '' };
+  const optOn = (c, v) => (c && c.optOut != null ? !!c.optOut : !!optOf(v).on);
+  const tailOf = (c, v, co, email) => [sigOf(co, email), optOn(c, v) && optOf(v).text].filter(Boolean).join('\n\n');
   const myMailboxes = (co) => ((co && co.s.mailboxes) || []).filter(mineMb);
   const primaryMailbox = (co) => { const m = myMailboxes(co); return (m.find((x) => x.primary) || m[0] || {}).email || ''; };
   const admin = () => au.role === 'admin';
@@ -334,15 +339,38 @@
       <label class="fl"><span>${t('notes')}</span><textarea class="in" data-top="notes" rows="3">${esc(c.notes)}</textarea></label>
       <div class="acts"><span class="sub small">${t('tabRecipients')}: ${n}</span><span class="grow"></span><button class="btn sm" data-act="ctab" data-v="recipients" ${n ? '' : 'disabled'}>${t('tabRecipients')} →</button></div>`;
   }
+  // Asks the server how the run is going; keeps asking while letters are still due and the Sending step is open.
+  function runPoll(cid) {
+    clearTimeout(runPoll.t);
+    Cloud.fn('campaignStatus', { cardId: cid }, 30000).then((r) => {
+      ui.run = { cid, rows: r.rows || [], now: r.now, at: Date.now() }; render();
+      if ((r.rows || []).some((x) => x.status === 'active')) runPoll.t = setTimeout(() => { if (ui.open === cid && ui.ctab === 'send') runPoll(cid); }, 30000);
+    }, (e) => { ui.run = { cid, rows: [], err: String(e && e.message || e) }; render(); });
+  }
+  function vRun(c, go, okAll) {
+    const r = ui.run && ui.run.cid === c.id ? ui.run : null, rows = (r && r.rows) || [], live = rows.some((x) => x.status === 'active');
+    const time = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const table = rows.length ? `<table class="ltable"><tr><th>${t('email')}</th><th>${t('variant')}</th><th>${t('runSent')}</th><th>${t('runState')}</th><th>${t('runNext')}</th></tr>
+      ${rows.map((x) => `<tr><td>${esc(x.to)}</td><td>${esc(x.variant)}</td><td>${x.sent} / ${x.of}</td><td><span class="chk ${x.status === 'replied' ? 'yes' : x.status === 'error' || x.status === 'bounced' ? 'unsure' : ''}">${t('run_' + x.status)}</span>${x.err ? `<small class="ev" title="${esc(x.err)}">${esc(x.err)}</small>` : ''}</td><td>${x.next ? time(x.next) : ''}</td></tr>`).join('')}</table>` : '';
+    const why = !CLOUD ? t('aiDemoOnly') : go < 1 ? t('runNoOne') : go > 5 ? t('runTooMany') : !okAll ? t('runNotApproved') : '';
+    return `<div class="sitebox"><div class="bh">${t('runTitle')}</div><p class="sub small">${t('runNote')}</p>
+      <div class="acts tight"><label class="sub small">${t('runGap')} <input class="in nin" type="number" min="2" max="120" data-testgap value="${+c.testGap || 10}" ${live ? 'disabled' : ''}></label>
+        ${live ? `<button class="btn ghost sm" data-act="runStop">${t('stop')}</button>` : `<button class="btn sm" data-act="runStart" ${why || (r && r.busy) ? 'disabled' : ''}>${r && r.busy ? t('aiBusy') : t('runStart')}</button>`}
+        <button class="link small" data-act="runRefresh" ${CLOUD ? '' : 'disabled'}>${t('runRefresh')}</button></div>
+      ${why ? `<p class="sub small">${why}</p>` : ''}${r && r.err ? `<p class="sub small errc">${esc(r.err)}</p>` : ''}${table}${live ? `<p class="sub small">${t('runLive')}</p>` : ''}</div>`;
+  }
   // Step 4: from which mailbox, by which rules, and what is still missing before the start.
   function vSend(c) {
     const seq = seqOf(c), v = S.vectors.find((x) => x.id === c.vid), co = v ? item('company', v.company) : null, mbs = myMailboxes(co), s = S.send;
     const from = mbs.length ? `<select class="in" data-seqfrom>${mbs.map((m) => `<option ${((seq.from || primaryMailbox(co)) === m.email) ? 'selected' : ''}>${esc(m.email)}</option>`).join('')}</select>` : `<span class="sub">${t('noMailbox')}</span>`;
     const all = S.leads.filter((l) => l.cid === c.id), go = all.filter(sendable).length, crit = critOf(c), unchecked = crit ? all.filter((l) => !l.off && !chkOf(l, crit)).length : 0;
     const firsts = varsOf(seq).map((k) => (k === 'A' ? seq.steps : seq.alt[k].steps)[0]), okL = firsts.filter((x) => x.status === 'approved').length;
+    const okAll = varsOf(seq).every((k) => (k === 'A' ? seq.steps : seq.alt[k].steps).every((x) => x.status === 'approved'));
     const li = (ok, text) => `<li class="${ok ? 'ok' : ''}">${ok ? '✓' : '○'} ${text}</li>`;
     const sum = t('sendSum').replace('{start}', s.start).replace('{step}', s.step).replace('{cap}', s.cap).replace('{a}', s.gapMin).replace('{b}', s.gapMax);
     return `<label class="fl"><span>${t('fromMailbox')}</span>${from}</label>
+      <button class="tog" data-act="cardOpt"><span class="sw ${optOn(c, v) ? 'on' : ''}"><i></i></span><span>${t('footOn')}<small>${optOf(v).text ? esc(optOf(v).text.split('\n').join(' · ')) : t('cardOptEmpty')}</small></span></button>
+      ${vRun(c, go, okAll)}
       <div class="sitebox"><div class="bh">${t('setSend')} · ${t('risk_' + s.level)}</div><p class="sub small">${sum}</p><button class="link small" data-act="sendOpen">${t('openRules')}</button></div>
       <div class="sitebox"><div class="bh">${t('readyTitle')}</div><ul class="ready">
         ${li(go > 0, `${t('readyWho')}: ${go}`)}${li(!unchecked, unchecked ? `${t('readyUnchecked')}: ${unchecked}` : t('readyChecked'))}
@@ -438,7 +466,7 @@
         <p class="sub small">${t(seq.split === 'role' ? 'splitRoleNote' : 'splitEvenNote')}</p>`}`;
     const head2 = `<div class="row2 vset"><label class="fl"><span>${t('sendLang')}</span><select class="in" data-seqlang>${LANGS.map((l) => `<option value="${l}" ${seq.lang === l ? 'selected' : ''}>${esc(langName(l))}</option>`).join('')}</select></label><span></span></div>
       ${seq.lang !== 'en' ? `<p class="sub small">${t('langNote').replace('{l}', langName(seq.lang))}</p>` : ''}`;
-    const done = list.filter((x) => x.status === 'approved').length, smp = Object.assign({}, sampleFor(c), { signature: sigOf(co, seq.from || primaryMailbox(co)) });
+    const done = list.filter((x) => x.status === 'approved').length, smp = Object.assign({}, sampleFor(c), { signature: tailOf(c, v, co, seq.from || primaryMailbox(co)) });
     // AI buttons work only in the real program: the keys live on the server, the demo has none.
     const aiBtn = (i, op, eng, label, off) => { const me = `${i}|${op}|${eng}`; return `<button class="btn ghost sm" data-act="aiGo" data-i="${i}" data-op="${op}" data-eng="${eng}" ${!CLOUD || ui.busy || off ? 'disabled' : ''} title="${CLOUD ? t('eng_' + eng) : t('aiDemoOnly')}">${ui.busy === me ? t('aiBusy') : label}</button>`; };
     const revBox = (st, i) => { const r = st.review; if (!r) return ''; const diff = r.body && (r.body !== st.body || (r.subject || '') !== (st.subject || ''));
@@ -522,8 +550,7 @@
           ${ui.mbRes && ui.mbRes.email === m.email ? `<span class="sub small ${ui.mbRes.ok ? 'okc' : 'errc'}">${esc(ui.mbRes.text)}</span>` : ''}</div>
         <textarea class="in" rows="3" data-mbsig="${i}" placeholder="${t('mbSignature')}">${esc(m.sig || '')}</textarea>
         ${m.sig ? '' : `<button class="link small" data-act="mbSigPlain" data-i="${i}">${t('sigPlain')}</button>`}
-        <button class="tog" data-act="mbFoot" data-i="${i}"><span class="sw ${m.footOn ? 'on' : ''}"><i></i></span><span>${t('footOn')}<small>${t('footHint')}</small></span></button>
-        ${m.footOn ? `<textarea class="in" rows="3" data-mbfoot="${i}" placeholder="${t('footPh')}">${esc(m.foot || '')}</textarea>` : ''}</div>`)).join('');
+        </div>`)).join('');
       return sIn(it, 'website', t('website')) + `<div class="fl"><span>${t('mailboxes')}</span>${boxes}<input class="in" data-listadd="mailboxes" placeholder="${t('addMailbox')}"><p class="sub small">${t('sigHint')}</p></div>`;
     }
     if (zone === 'direction') {
@@ -612,7 +639,10 @@
     } else {
       const v = S.vectors.find((x) => x.id === e.id); if (!v) return '';
       left = `<div class="bh">${t('vector')}</div><div class="chev stack">${chevron(v, {})}</div>
-        <div class="kvs">${ZONES.map((z) => `<div class="kv"><span>${t('zone_' + z)}</span><b>${esc((item(z, v[z]) || {}).name || '—')}</b></div>`).join('')}</div>`;
+        <div class="kvs">${ZONES.map((z) => `<div class="kv"><span>${t('zone_' + z)}</span><b>${esc((item(z, v[z]) || {}).name || '—')}</b></div>`).join('')}</div>
+        <div class="brief"><div class="bh">${t('vecLetters')}</div>
+          <button class="tog" data-act="vecOpt"><span class="sw ${optOf(v).on ? 'on' : ''}"><i></i></span><span>${t('footOn')}<small>${t('vecOptHint')}</small></span></button>
+          ${optOf(v).on ? `<textarea class="in" rows="3" data-vopt placeholder="${t('footPh')}">${esc(optOf(v).text || '')}</textarea><p class="sub small">${t('footHint')}</p>` : ''}</div>`;
       const canShare = v.owner === au.uid || manages(item('company', v.company));
       const others = au.users.filter((u) => u.id !== v.owner && (u.role === 'admin' || u.role === 'user'));
       const share = !CLOUD ? `<p class="sub">${t('accessNote')}</p>` : (others.map((u) => `<button class="tog" data-act="vecMember" data-uid="${u.id}" ${canShare ? '' : 'disabled'}><span class="sw ${(v.members || []).includes(u.id) || u.role === 'admin' ? 'on' : ''}"><i></i></span><span>${esc(u.name || u.email)}${u.role === 'admin' ? ' · ' + t('acc_admin') : ''}</span></button>`).join('') || `<p class="sub">${t('noOthers')}</p>`)
@@ -793,7 +823,8 @@
     moveCard(d) { const c = S.cards.find((x) => x.id === d.id), n = STAGES[stageIdx(c.stage) + +d.d]; if (n) { c.stage = n[0]; commit(); } },
     gotoStage(d) { const col = document.querySelector(`.col[data-stage="${d.stage}"]`); if (col) col.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' }); },
     wMove(d) { const i = S.widgets.indexOf(d.id), j = i + +d.d; if (i >= 0 && j >= 0 && j < S.widgets.length) { [S.widgets[i], S.widgets[j]] = [S.widgets[j], S.widgets[i]]; commit(); } },
-    ctab(d) { ui.ctab = d.v; ui.imp = null; ui.prev = -1; ui.delArm = false; const c = cur(); if (d.v === 'recipients' && c && !critOf(c) && S.leads.some((l) => l.cid === c.id)) critSuggest(c.id); render(); },
+    ctab(d) { if (d.v === 'send' && CLOUD && cur() && cur().type === 'campaign') runPoll(ui.open);
+      ui.ctab = d.v; ui.imp = null; ui.prev = -1; ui.delArm = false; const c = cur(); if (d.v === 'recipients' && c && !critOf(c) && S.leads.some((l) => l.cid === c.id)) critSuggest(c.id); render(); },
     leadImport() { const el = document.querySelector('[data-leadpaste]'); if (el && el.value.trim()) importLeads(cur(), el.value); },
     siteGo() { runCheck(ui.open); },
     siteStop() { if (ui.site) ui.site.stop = true; render(); },
@@ -850,6 +881,16 @@
     sendOpen() { ui.edit = { kind: 'send' }; ui.menu = null; render(); },
     sendTog(d) { S.send[d.k] = !S.send[d.k]; commit(); },
     toneToggle(d) { const s = curParam().s; s.tones = s.tones || []; const i = s.tones.indexOf(d.v); if (i < 0) s.tones.push(d.v); else s.tones.splice(i, 1); commit(); },
+    vecOpt() { const v = S.vectors.find((x) => x.id === ui.edit.id), o = optOf(v); v.opt = { on: !o.on, text: o.text || OPT_TEXT + '\n' + ((item('company', v.company) || {}).name || '') }; commit(); },
+    cardOpt() { const c = cur(), v = S.vectors.find((x) => x.id === c.vid); c.optOut = !optOn(c, v); commit(); },
+    // Test run: the server sends the approved letters to at most five recipients, a few minutes apart.
+    runStart() {
+      const c = cur(); if (!CLOUD || (ui.run && ui.run.busy)) return;
+      ui.run = { cid: c.id, busy: true, rows: [] }; commit();
+      setTimeout(() => Cloud.fn('campaignStart', { cardId: c.id, gap: +c.testGap || 10 }).then(() => runPoll(c.id), (e) => { ui.run = { cid: c.id, err: String(e && e.message || e), rows: [] }; render(); }), 2000);
+    },
+    runStop() { const c = cur(); Cloud.fn('campaignStop', { cardId: c.id }).then(() => runPoll(c.id), (e) => { ui.err = String(e && e.message || e); ui.errAi = true; render(); }); },
+    runRefresh() { runPoll(ui.open); },
     mbFoot(d) {
       const it = curParam(), m = it.s.mailboxes[+d.i]; m.footOn = !m.footOn;
       if (m.footOn && !m.foot) m.foot = 'Not relevant? Reply "no" and I will not write again.\n' + it.name;
@@ -1017,6 +1058,8 @@
     if (el.hasAttribute('data-lq')) { ui.lq = el.value; const pos = el.selectionStart; render(); const n = document.querySelector('[data-lq]'); n.focus(); n.setSelectionRange(pos, pos); return; }
     if (el.dataset.crit && c) { const k = c.check = c.check || {}; if (el.dataset.crit === 'terms') k.terms = el.value.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean); else if (el.dataset.crit === 'tag') k.tag = el.value.trim().toLowerCase().replace(/^#/, '').replace(/[^a-z0-9а-яіїєґ]+/gi, '-'); else k.crit = el.value; save(); return; }
     if (el.hasAttribute('data-findq')) { ui.findq = el.value; return; }
+    if (el.hasAttribute('data-vopt') && ui.edit) { const v = S.vectors.find((x) => x.id === ui.edit.id); v.opt = { on: true, text: el.value }; save(); return; }
+    if (el.hasAttribute('data-testgap') && c) { c.testGap = Math.max(2, Math.min(120, Math.round(+el.value) || 10)); save(); return; }
     if (el.hasAttribute('data-cmt') || el.dataset.lemail) return;
     if (el.hasAttribute('data-seqwho') && c) { const q = seqOf(c), k = curVar(q); if (k === 'A') q.whoA = el.value; else q.alt[k].who = el.value; save(); return; }
     if (el.dataset.seq && c) {
