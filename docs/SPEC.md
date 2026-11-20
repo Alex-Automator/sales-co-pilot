@@ -208,3 +208,31 @@ Sales-Co-pilot/
 - **Нагадування** йдуть у ту саму гілку (In-Reply-To, References), тема «Re: …», якщо власну не задано.
 - **Хід кампанії** видно на кроці «Надсилання»: лічильники, стан скриньки на сьогодні, таблиця по отримувачах, кнопка «Зупинити кампанію».
 - Перед постановкою в чергу сервер перевіряє, що справді може надсилати з обраної скриньки.
+
+## 19. Statistics and journal (agreed 20 Nov 2026, not built yet)
+
+Step 1 of the "sales director" plan (statistics and journal → adviser inside VECTOR → Claude connector).
+
+**Statistics in the campaign card** (step "Sending", collapsed by default, opens on demand): sent / delivered /
+bounced; replies and reply share of delivered; which letter was answered (first, reminder 1, reminder 2);
+variants A / B / C side by side; a "too little data" mark while a variant has fewer than about 30 letters.
+
+**Statistics page** (Widgets), with period and company filters: by vector parameter (company, direction, audience,
+topic), by recipient job title, by criterion result (yes / unsure), by mailbox (sent per day against the cap,
+bounce share), by weekday and hour.
+
+**Funnel after a reply**: how many campaign contacts reached each board stage and the average days per step.
+Deal amounts are not needed for now.
+
+**Not counted**: opens and clicks (tracking hurts delivery), spam placement (cannot be seen).
+
+**Reply quality**: four categories: Interested, Not now, No, Auto-reply. AI reads the reply and proposes the
+category, the person can change it. An auto-reply does not stop the chain and does not create a card.
+
+**Who sees what**: an operator sees only their own companies, vectors and cards; an admin sees the company and
+everything operators and the admin opened under it; the super admin sees everything.
+
+**Journal** (a tab in Database). The program records facts itself (campaign start, letter change, topic hook
+change, sending rules change) with the numbers before. At the check date AI compares the numbers and writes the
+conclusion and what to do next. The person confirms it, or disagrees and leaves a comment, and AI rewrites the
+conclusion with that comment. The goal is a system that runs as independently as possible, with the person approving.
