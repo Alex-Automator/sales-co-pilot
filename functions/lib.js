@@ -305,10 +305,11 @@ function rawMail({ from, fromName, to, subject, body, sig, sigHtml, foot, replyT
   const who = String(fromName || '').replace(/[\r\n<>"]/g, ' ').trim().slice(0, 80), ascii = /^[\x20-\x7e]*$/.test(who);
   const head = [`From: ${who ? (ascii ? '"' + who.replace(/\\/g, '') + '"' : mimeWord(who)) + ' <' + from + '>' : from}`, `To: ${to}`, `Subject: ${mimeWord(String(subject || ''))}`].concat(replyTo ? [`In-Reply-To: ${replyTo}`, `References: ${replyTo}`] : [], ['MIME-Version: 1.0']);
   const text = [String(body || '').replace(/\s+$/, ''), String(sig || '').trim(), String(foot || '').trim()].filter(Boolean).join('\n\n').replace(/\r?\n/g, '\r\n'), plain = ['Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', b64lines(text)];
-  const hsig = cleanSig(sigHtml);
-  if (!hsig) return b64url(head.concat(plain).join('\r\n'));
+  // Every letter also carries an HTML version: without it some mail programs show the text in a typewriter font
+  // with broken lines. A mailbox without an HTML signature gets its plain signature in the same font.
+  const hsig = cleanSig(sigHtml) || (String(sig || '').trim() ? `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#222222;">${escHtml(String(sig).trim()).replace(/\r?\n/g, '<br>')}</div>` : '');
   const { html, images } = inlineImages(hsig), id = Date.now().toString(36), A = 'vecA' + id, R = 'vecR' + id;
-  const page = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#222222;">${escHtml(String(body || '').replace(/\s+$/, '')).replace(/\r?\n/g, '<br>')}</div><br>${html}${String(foot || '').trim() ? `<div style="font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.5;color:#777777;margin-top:14px;">${escHtml(String(foot).trim()).replace(/\r?\n/g, '<br>')}</div>` : ''}`;
+  const page = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#222222;">${escHtml(String(body || '').replace(/\s+$/, '')).replace(/\r?\n/g, '<br>')}</div>${html ? '<br>' + html : ''}${String(foot || '').trim() ? `<div style="font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.5;color:#777777;margin-top:14px;">${escHtml(String(foot).trim()).replace(/\r?\n/g, '<br>')}</div>` : ''}`;
   const alt = [`Content-Type: multipart/alternative; boundary="${A}"`, '', '--' + A].concat(plain, ['--' + A, 'Content-Type: text/html; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', b64lines(page), '--' + A + '--']);
   if (!images.length) return b64url(head.concat(alt).join('\r\n'));
   const parts = [`Content-Type: multipart/related; boundary="${R}"`, '', '--' + R].concat(alt);
@@ -355,10 +356,27 @@ async function threadState(fetchFn, tokens, mailbox, threadId) {
   const other = froms.filter((f) => f && !f.includes(mailbox.toLowerCase()));
   return other.some((f) => /mailer-daemon|postmaster/.test(f)) ? 'bounced' : other.length ? 'replied' : '';
 }
+// Has this person written to the mailbox since the first letter, in any thread? People often answer with a new letter,
+// and a reminder with its own subject starts a new thread, so the thread alone is not enough.
+async function wroteBack(fetchFn, tokens, mailbox, addr, sinceMs) {
+  const a = String(addr || '').replace(/[^\w.+\-@]/g, ''); if (!a) return false;
+  const q = encodeURIComponent(`from:${a} after:${Math.floor(sinceMs / 1000) - 120}`);
+  const d = await getJson(fetchFn, GMAIL + 'messages?maxResults=1&includeSpamTrash=true&q=' + q, await tokenFor(fetchFn, tokens, mailbox, READ));
+  return (d.messages || []).length > 0;
+}
+// The state of one recipient: every thread their letters went into, then the mailbox as a whole.
+async function sendState(fetchFn, tokens, mailbox, d) {
+  const ids = (d.threads || []).concat(d.threadId || []).filter((x, i, a) => x && a.indexOf(x) === i); let st = '';
+  for (const id of ids) { const s = await threadState(fetchFn, tokens, mailbox, id); if (s === 'bounced') return s; if (s) st = s; }
+  if (!st && (d.sentAt || []).length && await wroteBack(fetchFn, tokens, mailbox, d.to, d.sentAt[0])) st = 'replied';
+  return st;
+}
 
 // ---------- Campaign run ----------
 const FAR = 9e15;
 const kept = (text, r) => String(text || '').replace(/[ \t]*\[\[([\s\S]*?)\]\]/g, (m, inner) => ((inner.match(/\{\{\s*\w+\s*\}\}/g) || []).every((x) => r[x.replace(/[{}\s]/g, '')]) ? ' ' + inner.trim() : '')).replace(/^ +/gm, '');
+// Fields a letter needs (outside [[optional phrases]]) that this recipient does not have.
+const emptyVars = (text, r) => (kept(text, r).match(/\{\{\s*\w+\s*\}\}/g) || []).map((x) => x.replace(/[{}\s]/g, '')).filter((k, i, a) => k !== 'signature' && !r[k] && a.indexOf(k) === i);
 const fill = (text, r) => kept(text, r).replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => (r[k] == null ? '' : String(r[k])));
 const wordsOf = (x) => String(x || '').toLowerCase().split(/[,;\n]/).map((w) => w.trim()).filter(Boolean);
 const UNIT = { m: 60000, h: 3600000, d: 86400000 };
@@ -376,9 +394,10 @@ function planRun({ card, leads, myName, unitMs }) {
     let k = 'A';
     if (vars.length > 1) { if (seq.split === 'role') { const jt = String(l.f.jobTitle || '').toLowerCase(); k = vars.find((v) => wordsOf(whoOf(v)).some((w) => jt.includes(w))) || 'A'; } else k = vars[n % vars.length]; }
     const r = Object.assign({}, l.f, { project: (l.chk && l.chk.s === 'yes' && l.chk.proj) || '', myName, signature: '' }), st = stepsOf(k);
+    const holes = []; st.forEach((x, i) => emptyVars(x.subject + '\n' + x.body, r).forEach((v) => holes.push(`${k}${i + 1}|${v}`)));
     const first = fill(st[0].subject, r).trim();
     const steps = st.map((x, i) => ({ subject: fill(x.subject, r).trim() || (i ? 'Re: ' + first : first), body: fill(x.body, r).replace(/\s+$/, ''), wait: i ? Math.max(1, (+x.day || 0) - (+st[i - 1].day || 0)) * unitMs : 0 }));
-    return { lead: l.id, to: l.f.email, name: [l.f.firstName, l.f.lastName].filter(Boolean).join(' '), company: l.f.company || '', jobTitle: l.f.jobTitle || '', tags: l.tags || [], variant: k, steps };
+    return { lead: l.id, to: l.f.email, name: [l.f.firstName, l.f.lastName].filter(Boolean).join(' '), company: l.f.company || '', jobTitle: l.f.jobTitle || '', tags: l.tags || [], variant: k, steps, holes };
   });
 }
 
@@ -395,10 +414,10 @@ const gapFor = (rules, rnd) => { const a = Math.max(1, +rules.gapMin || 10), b =
 async function sendStep(fetchFn, tokens, d, run, now) {
   const step = d.steps[d.i], plan = watchPlan(run.unitMs);
   const sent = await sendMail(fetchFn, { from: run.from, fromName: run.fromName || '', to: d.to, subject: step.subject, body: step.body, sig: run.sig, sigHtml: run.sigHtml, foot: run.foot, threadId: d.threadId || undefined, replyTo: d.firstMsgId || undefined }, tokens);
-  const out = { status: 'active', i: d.i + 1, threadId: sent.threadId || d.threadId || '', sentAt: (d.sentAt || []).concat([now]), errs: 0, err: '' };
+  const out = { status: 'active', i: d.i + 1, threadId: sent.threadId || d.threadId || '', threads: (d.threads || []).concat(d.threadId || [], sent.threadId || []).filter((x, i, a) => x && a.indexOf(x) === i), sentAt: (d.sentAt || []).concat([now]), errs: 0, err: '' };
   if (d.i === 0) out.firstMsgId = await messageId(fetchFn, tokens, run.from, sent.id).catch(() => '');
   if (out.i < d.steps.length) out.due = now + d.steps[out.i].wait; else { out.due = now + plan.every; out.watchUntil = now + plan.span; }
   return out;
 }
 
-module.exports = { rawMail, sendMail, MAILER, mailToken, planRun, sendStep, threadState, tokenFor, localParts, inWindow, capFor, gapFor, watchPlan, UNIT, FAR, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };
+module.exports = { READ, SEND, wroteBack, sendState, emptyVars, rawMail, sendMail, MAILER, mailToken, planRun, sendStep, threadState, tokenFor, localParts, inWindow, capFor, gapFor, watchPlan, UNIT, FAR, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };

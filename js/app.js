@@ -377,6 +377,8 @@
   function runWhy(e) {
     const m = String(e && e.message || e);
     if (/RULE_PRIMARY/.test(m)) return t('runPrimary').replace('{m}', m.split('RULE_PRIMARY ')[1] || '');
+    if (/MAIL_READ/.test(m)) return t('runNoRead') + ' ' + m.replace(/.*MAIL_READ\s*/, '');
+    if (/EMPTY_FIELDS/.test(m)) return t('runHoles') + ' ' + m.replace(/.*EMPTY_FIELDS\s*/, '').split(',').map((x) => { const [l, f, n] = x.split('|'); return t('runHole').replace('{l}', l).replace('{f}', '{{' + f + '}}').replace('{n}', n); }).join('; ') + '. ' + t('runHolesFix');
     if (/MAIL_ACCESS/.test(m)) return t('runNoAccess') + ' ' + m.replace(/.*MAIL_ACCESS\s*/, '');
     if (/not approved yet/.test(m)) return t('runNotApproved') + ' ' + m;
     if (/NOT_FOUND|not-found|^internal$/i.test(m)) return t('errDeploy');
@@ -390,6 +392,7 @@
     const why = !live ? '' : !bx.open ? t('runClosed') : bx.newToday >= bx.capToday && r.run.queue ? t('runCap').replace('{n}', bx.capToday) : bx.nextAt > r.now ? t('runNextAt') + ' ' + time(bx.nextAt) : t('runSoon');
     return `<div class="sitebox"><div class="bh">${t('runTitle')} · ${t(live ? 'run_active' : 'run_' + r.run.status)}</div>
       <p class="sitesum"><span>${t('runLetters')}: ${r.letters}</span>${sumRow}</p>${live ? `<p class="sub small">${esc(r.run.from)} · ${t('runToday')}: ${bx.newToday} / ${bx.capToday} · ${why}</p>` : ''}
+      ${bx.readErr ? `<div class="revbox"><b>${t('runNoRead')}</b><small>${esc(bx.readErr)}</small></div>` : ''}
       <div class="acts tight">${live ? `<button class="btn ghost sm danger" data-act="runStop">${t('runStopBtn')}</button>` : ''}<button class="link small" data-act="runRefresh">${t('runRefresh')}</button></div>
       <table class="ltable"><tr><th>${t('email')}</th><th>${t('variant')}</th><th>${t('runSent')}</th><th>${t('runState')}</th><th>${t('runNext')}</th></tr>
       ${(r.rows || []).map((x) => `<tr><td>${esc(x.to)}</td><td>${esc(x.variant)}</td><td>${x.sent} / ${x.of}</td><td><span class="chk ${x.status === 'replied' ? 'yes' : x.status === 'error' || x.status === 'bounced' ? 'unsure' : ''}">${t('run_' + x.status)}</span>${x.err ? `<small class="ev" title="${esc(x.err)}">${esc(x.err)}</small>` : ''}</td><td>${x.next ? time(x.next) : ''}</td></tr>`).join('')}</table>

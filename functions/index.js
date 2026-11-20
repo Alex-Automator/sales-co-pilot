@@ -167,10 +167,21 @@ exports.campaignStart = onCall({ timeoutSeconds: 120, memory: '512MiB' }, async 
   try { plan = lib.planRun({ card, leads: leadSnap.docs.map((x) => x.data()), myName: user.name || '', unitMs }); } catch (e) { throw new HttpsError('failed-precondition', e.message); }
   const have = {}; old.docs.forEach((x) => { if (x.data().status !== 'queued') have[x.id] = 1; });
   const fresh = plan.filter((p) => !have[`${d.cardId}_${p.lead}`]);
+  // A field that is empty for some recipients would leave a hole in the sentence ("I noticed that  has been...").
+  const holes = {}; fresh.forEach((p) => (p.holes || []).forEach((h) => { holes[h] = (holes[h] || 0) + 1; }));
+  if (Object.keys(holes).length) throw new HttpsError('failed-precondition', 'EMPTY_FIELDS ' + Object.keys(holes).map((h) => h + '|' + holes[h]).join(','));
+  fresh.forEach((p) => { delete p.holes; });
+  // Letters that stopped on an error (no access to the mailbox, for example) get another try.
+  const broken = old.docs.filter((x) => x.data().status === 'error');
+  if (broken.length) { const b = db().batch(); broken.forEach((x) => b.update(x.ref, { status: 'active', errs: 0, err: '', due: Date.now() })); await b.commit(); await db().collection('runs').doc(d.cardId).set({ status: 'active', updatedAt: Date.now() }, { merge: true }); }
+  if (!fresh.length && broken.length) return { queued: 0, already: plan.length, revived: broken.length, from: box.email };
   if (!fresh.length) throw new HttpsError('failed-precondition', plan.length ? 'Everyone on the list has already been written to.' : 'There is no recipient with an address.');
   // Before anything is queued: can the server really send from this mailbox?
   try { await lib.mailToken(fetch, box.email, 'https://www.googleapis.com/auth/gmail.send'); }
   catch (e) { throw new HttpsError('failed-precondition', 'MAIL_ACCESS ' + e.message.slice(0, 300)); }
+  // ...and read it? Without reading, replies stay unseen and reminders would go to people who already answered.
+  try { await lib.mailToken(fetch, box.email, lib.READ); }
+  catch (e) { throw new HttpsError('failed-precondition', 'MAIL_READ ' + e.message.slice(0, 300)); }
   await countUse(uid, 'm', 30);
   const optOn = card.optOut == null ? !!(v.opt && v.opt.on) : !!card.optOut, now = Date.now(), ids = fresh.map((p) => `${d.cardId}_${p.lead}`);
   for (let i = 0; i < fresh.length; i += 400) {
@@ -193,7 +204,9 @@ exports.campaignStatus = onCall({ timeoutSeconds: 30, memory: '256MiB' }, async 
   all.forEach((x) => { counts[x.status] = (counts[x.status] || 0) + 1; letters += x.i || 0; });
   const r = run.exists ? run.data() : null, now = Date.now(); let box = null;
   if (r) { const ms = await db().collection('mailstate').doc(r.from).get(), m = ms.exists ? ms.data() : {}, day = lib.localParts(now, r.tz).day;
-    box = { from: r.from, nextAt: m.nextAt || 0, newToday: m.day === day ? m.newToday || 0 : 0, capToday: lib.capFor(rules, m.firstAt, now), open: lib.inWindow(rules, now, r.tz) }; }
+    // Can the server read this mailbox? If not, replies cannot be seen: say so instead of silently waiting.
+    let readErr = ''; try { await lib.mailToken(fetch, r.from, lib.READ); } catch (e) { readErr = e.message.slice(0, 240); }
+    box = { readErr, from: r.from, nextAt: m.nextAt || 0, newToday: m.day === day ? m.newToday || 0 : 0, capToday: lib.capFor(rules, m.firstAt, now), open: lib.inWindow(rules, now, r.tz) }; }
   const order = { replied: 0, error: 1, bounced: 2, active: 3, queued: 4, done: 5, stopped: 6 };
   const rows = all.sort((a, b) => (order[a.status] - order[b.status]) || ((b.sentAt || []).slice(-1)[0] || 0) - ((a.sentAt || []).slice(-1)[0] || 0)).slice(0, 300)
     .map((x) => ({ to: x.to, name: x.name, variant: x.variant, sent: x.i, of: x.steps.length, status: x.status, next: x.status === 'active' && x.i < x.steps.length ? x.due : 0, err: x.err || '' }));
@@ -223,6 +236,8 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
   const now = Date.now(), tokens = {}, runs = {}, rules = await rulesNow();
   const runOf = async (cid) => { if (!(cid in runs)) { const r = await db().collection('runs').doc(cid).get(); runs[cid] = r.exists ? Object.assign({ ref: r.ref }, r.data()) : null; } return runs[cid]; };
   const fail = async (ref, d, e) => { console.error('send failed', ref.id, e.message); const errs = (d.errs || 0) + 1;
+    // No access to the mailbox is not the recipient's fault: keep waiting until the Workspace admin fixes it.
+    if (/unauthorized_client|access_denied|invalid_grant/.test(e.message)) { await ref.update({ due: Date.now() + 10 * 60000, err: 'No access to the mailbox: ' + e.message.slice(0, 240) }); return; }
     await ref.update(errs >= 3 ? { status: 'error', due: lib.FAR, errs, err: e.message.slice(0, 300) } : { due: Date.now() + 4 * 60000, errs, err: e.message.slice(0, 300) }); };
 
   // 1. Threads whose time has come: a reply or a bounce ends the chain; otherwise the next letter waits for its mailbox.
@@ -232,7 +247,7 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
     try {
       const run = await runOf(d.cid);
       if (d.status !== 'active' || !run || run.status !== 'active') { await doc.ref.update({ due: lib.FAR }); return; }
-      const st = d.threadId ? await lib.threadState(fetch, tokens, run.from, d.threadId) : '';
+      const st = await lib.sendState(fetch, tokens, run.from, d);
       if (st) { await doc.ref.update({ status: st, due: lib.FAR, endedAt: now }); if (st === 'replied') await replyCard(d, run, doc.ref); return; }
       if (d.i < d.steps.length) { (follow[run.from] = follow[run.from] || []).push({ doc, d, run }); return; }
       const plan = lib.watchPlan(run.unitMs);
