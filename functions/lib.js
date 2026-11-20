@@ -364,6 +364,12 @@ async function wroteBack(fetchFn, tokens, mailbox, addr, sinceMs) {
   const d = await getJson(fetchFn, GMAIL + 'messages?maxResults=1&includeSpamTrash=true&q=' + q, await tokenFor(fetchFn, tokens, mailbox, READ));
   return (d.messages || []).length > 0;
 }
+// Did a letter to this address really leave the mailbox since the given moment? Used after an interrupted attempt.
+async function sentSince(fetchFn, tokens, mailbox, addr, sinceMs) {
+  const a = String(addr || '').replace(/[^\w.+\-@]/g, ''); if (!a) return null;
+  const d = await getJson(fetchFn, GMAIL + 'messages?maxResults=1&q=' + encodeURIComponent(`in:sent to:${a} after:${Math.floor(sinceMs / 1000) - 120}`), await tokenFor(fetchFn, tokens, mailbox, READ));
+  return (d.messages || [])[0] || null;
+}
 // The state of one recipient: every thread their letters went into, then the mailbox as a whole.
 async function sendState(fetchFn, tokens, mailbox, d) {
   const ids = (d.threads || []).concat(d.threadId || []).filter((x, i, a) => x && a.indexOf(x) === i); let st = '';
@@ -473,4 +479,4 @@ async function sendStep(fetchFn, tokens, d, run, now) {
   return out;
 }
 
-module.exports = { nextCheck, convo, reply, replyPrompt, unquote, mailText, READ, SEND, wroteBack, sendState, emptyVars, rawMail, sendMail, MAILER, mailToken, planRun, sendStep, threadState, tokenFor, localParts, inWindow, capFor, gapFor, watchPlan, UNIT, FAR, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };
+module.exports = { sentSince, nextCheck, convo, reply, replyPrompt, unquote, mailText, READ, SEND, wroteBack, sendState, emptyVars, rawMail, sendMail, MAILER, mailToken, planRun, sendStep, threadState, tokenFor, localParts, inWindow, capFor, gapFor, watchPlan, UNIT, FAR, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };

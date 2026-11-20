@@ -146,6 +146,9 @@ async function cardGuard(req) {
   if (!superAdmin && !(card.data().acl || []).includes(uid)) throw new HttpsError('permission-denied', 'You have no access to this card.');
   return { uid, d, card: card.data(), superAdmin, user: user.data() };
 }
+// The admin's forbidden list for one person: exact addresses and whole domains.
+const forbiddenFor = async (uid) => { const g = await db().collection('guards').doc(String(uid || '-')).get(); return ((g.exists && g.data().list) || []).map((x) => String(x).trim().toLowerCase().replace(/^@/, '')).filter(Boolean); };
+const isForbidden = (list, email) => { const e = String(email || '').trim().toLowerCase(); return list.some((g) => e === g || e.endsWith('@' + g)); };
 const sendsOf = (cardId) => db().collection('sends').where('cid', '==', cardId).get();
 const rulesNow = async () => { const s = await db().collection('workspace').doc('shared').get(); return Object.assign({ start: 3, step: 2, cap: 10, gapMin: 10, gapMax: 20, from: 9, to: 17, workdays: true, jitter: true, coldSecondary: true }, (s.exists && s.data().send) || {}); };
 const inChunks = async (items, n, fn) => { for (let i = 0; i < items.length; i += n) await Promise.all(items.slice(i, i + n).map(fn)); };
@@ -165,6 +168,14 @@ exports.campaignStart = onCall({ timeoutSeconds: 120, memory: '512MiB' }, async 
   const unitMs = lib.UNIT[(card.seq || {}).unit] || lib.UNIT.d;
   let plan;
   try { plan = lib.planRun({ card, leads: leadSnap.docs.map((x) => x.data()), myName: user.name || '', unitMs }); } catch (e) { throw new HttpsError('failed-precondition', e.message); }
+  // The admin's forbidden list for this person is checked here too, not only on the screen; one address gets one chain.
+  const banned = await forbiddenFor(uid), total = plan.length, seenTo = {};
+  old.docs.forEach((x) => { const o = x.data(); if (o.status !== 'queued') seenTo[String(o.to || '').toLowerCase()] = x.id; });
+  let forbidden = 0, dupes = 0;
+  plan = plan.filter((p) => { const e = String(p.to).trim().toLowerCase(), id = `${d.cardId}_${p.lead}`;
+    if (isForbidden(banned, e)) { forbidden++; return false; }
+    if (seenTo[e] && seenTo[e] !== id) { dupes++; return false; }
+    seenTo[e] = id; return true; });
   const have = {}; old.docs.forEach((x) => { if (x.data().status !== 'queued') have[x.id] = 1; });
   const fresh = plan.filter((p) => !have[`${d.cardId}_${p.lead}`]);
   // A field that is empty for some recipients would leave a hole in the sentence ("I noticed that  has been...").
@@ -174,8 +185,8 @@ exports.campaignStart = onCall({ timeoutSeconds: 120, memory: '512MiB' }, async 
   // Letters that stopped on an error (no access to the mailbox, for example) get another try.
   const broken = old.docs.filter((x) => x.data().status === 'error');
   if (broken.length) { const b = db().batch(); broken.forEach((x) => b.update(x.ref, { status: 'active', errs: 0, err: '', due: Date.now() })); await b.commit(); await db().collection('runs').doc(d.cardId).set({ status: 'active', updatedAt: Date.now() }, { merge: true }); }
-  if (!fresh.length && broken.length) return { queued: 0, already: plan.length, revived: broken.length, from: box.email };
-  if (!fresh.length) throw new HttpsError('failed-precondition', plan.length ? 'Everyone on the list has already been written to.' : 'There is no recipient with an address.');
+  if (!fresh.length && broken.length) return { queued: 0, already: plan.length, revived: broken.length, from: box.email, forbidden, dupes };
+  if (!fresh.length) throw new HttpsError('failed-precondition', plan.length ? 'Everyone on the list has already been written to.' : total ? `NOBODY_LEFT ${forbidden}|${dupes}` : 'There is no recipient with an address.');
   // Before anything is queued: can the server really send from this mailbox?
   try { await lib.mailToken(fetch, box.email, 'https://www.googleapis.com/auth/gmail.send'); }
   catch (e) { throw new HttpsError('failed-precondition', 'MAIL_ACCESS ' + e.message.slice(0, 300)); }
@@ -193,7 +204,7 @@ exports.campaignStart = onCall({ timeoutSeconds: 120, memory: '512MiB' }, async 
   const queue = (prev.exists && prev.data().status === 'active' ? (prev.data().queue || []).filter((x) => !ids.includes(x)) : []).concat(ids);
   await runRef.set({ cid: d.cardId, vid: card.vid, owner: uid, acl: card.acl || [], cardTitle: card.title || '', cardVec: card.vec || {}, from: box.email, fromName: box.name || user.name || '', sig: box.sig || '', sigHtml: box.sigHtml || '',
     foot: optOn ? (v.opt && v.opt.text) || '' : '', tz: String(d.tz || 'UTC').slice(0, 60), unitMs, status: 'active', startedAt: prev.exists ? prev.data().startedAt || now : now, updatedAt: now, queue });
-  return { queued: fresh.length, already: plan.length - fresh.length, from: box.email };
+  return { queued: fresh.length, already: plan.length - fresh.length, from: box.email, forbidden, dupes };
 });
 
 // campaignStatus({ cardId }) -> { run, counts, rows, box } for the progress table.
@@ -218,7 +229,8 @@ exports.campaignStatus = onCall({ timeoutSeconds: 30, memory: '256MiB' }, async 
 exports.campaignStop = onCall({ timeoutSeconds: 60, memory: '256MiB' }, async (req) => {
   const { d } = await cardGuard(req);
   const snap = await sendsOf(d.cardId), live = snap.docs.filter((x) => ['active', 'queued'].includes(x.data().status)), now = Date.now();
-  for (let i = 0; i < live.length; i += 400) { const batch = db().batch(); live.slice(i, i + 400).forEach((x) => batch.update(x.ref, { status: 'stopped', due: lib.FAR, endedAt: now })); await batch.commit(); }
+  for (let i = 0; i < live.length; i += 400) { const batch = db().batch(); // People who already got a letter may still answer: their reply check stays on.
+    live.slice(i, i + 400).forEach((x) => batch.update(x.ref, Object.assign({ status: 'stopped', due: lib.FAR, endedAt: now }, (x.data().sentAt || []).length ? { chk: now } : { chk: lib.FAR }))); await batch.commit(); }
   await db().collection('runs').doc(d.cardId).set({ status: 'stopped', queue: [], updatedAt: now }, { merge: true });
   return { stopped: live.length };
 });
@@ -288,7 +300,7 @@ async function replyCard(d, run, ref) {
     f: { jobTitle: d.jobTitle || '', company: d.company || '', email: d.to, phone: '', linkedin: '' }, next: { text: 'Answer the reply', date: new Date().toISOString().slice(0, 10) }, awaiting: true,
     auto: { follow: false, reply: false, notify: true, draft: true }, notes: `Replied to the campaign "${run.cardTitle}" (variant ${d.variant}, after letter ${d.i}).`, photo: '', blocked: '', okEmail: d.to, tags: d.tags || [],
     mail: { box: run.from, threads: (d.threads || []).concat(d.threadId || []).filter((x, i, a) => x && a.indexOf(x) === i), since: (d.sentAt || [])[0] || Date.now() } });
-  await db().collection('leads').doc(d.lead).set({ card: id, replied: true }, { merge: true }).catch(() => {});
+  await db().collection('leads').doc(d.lead).update({ card: id, replied: true }).catch(() => {});
 }
 
 // Every two minutes: look for replies, then let each mailbox send at most one letter if the sending rules allow it.
@@ -299,6 +311,23 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
     // No access to the mailbox is not the recipient's fault: keep waiting until the Workspace admin fixes it.
     if (/unauthorized_client|access_denied|invalid_grant/.test(e.message)) { await ref.update({ due: Date.now() + 10 * 60000, err: 'No access to the mailbox: ' + e.message.slice(0, 240) }); return; }
     await ref.update(errs >= 3 ? { status: 'error', due: lib.FAR, errs, err: e.message.slice(0, 300) } : { due: Date.now() + 4 * 60000, errs, err: e.message.slice(0, 300) }); };
+
+  // Reasons not to send: the card is gone, the person was removed or left out, or the admin has forbidden the address since.
+  const alive = {}, bans = {};
+  const stillWanted = async (job) => {
+    const cid = job.d.cid; if (!(cid in alive)) alive[cid] = (await db().collection('cards').doc(cid).get()).exists;
+    if (!alive[cid]) return 'no card';
+    const lead = await db().collection('leads').doc(String(job.d.lead || '-')).get();
+    if (!lead.exists) return 'Removed from the campaign list.';
+    if (lead.data().off || lead.data().blocked) return 'Left out of the campaign.';
+    const who = job.run.owner || ''; if (!(who in bans)) bans[who] = await forbiddenFor(who);
+    return isForbidden(bans[who], job.d.to) ? 'On the forbidden list.' : '';
+  };
+  const endRun = async (run, at) => {
+    const snap = await sendsOf(run.cid), live = snap.docs.filter((x) => ['active', 'queued'].includes(x.data().status));
+    for (let i = 0; i < live.length; i += 400) { const b = db().batch(); live.slice(i, i + 400).forEach((x) => b.update(x.ref, { status: 'stopped', due: lib.FAR, chk: lib.FAR, endedAt: at })); await b.commit(); }
+    await run.ref.update({ status: 'stopped', queue: [], updatedAt: at }); run.status = 'stopped'; run.queue = [];
+  };
 
   // 1. Threads whose time has come: a reply or a bounce ends the chain; otherwise the next letter waits for its mailbox.
   const due = await db().collection('sends').where('due', '<=', now).orderBy('due').limit(240).get(), follow = {};
@@ -331,11 +360,33 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
     try {
       if (justSeen.has(doc.id)) { await doc.ref.update({ chk: lib.nextCheck(d, now) }); return; }
       const run = await runOf(d.cid);
-      if (d.status !== 'active' || !run || run.status !== 'active') { await doc.ref.update({ chk: lib.FAR }); return; }
+      // A stopped campaign sends nothing more, but an answer to a letter already sent still counts (for three weeks).
+      const last = (d.sentAt || []).slice(-1)[0] || 0, halted = d.status === 'stopped' && last && now - last < 21 * 86400000;
+      if (!run || !last || !(halted || (d.status === 'active' && run.status === 'active'))) { await doc.ref.update({ chk: lib.FAR }); return; }
       const st = await lib.sendState(fetch, tokens, run.from, d);
       if (st) { note.ended++; note[st] = (note[st] || 0) + 1; await doc.ref.update({ status: st, due: lib.FAR, chk: lib.FAR, endedAt: now }); if (st === 'replied') await replyCard(d, run, doc.ref); return; }
       await doc.ref.update({ chk: lib.nextCheck(d, now), err: '' });
     } catch (e) { console.error('reply check failed', doc.id, e.message); await doc.ref.update({ chk: now + 10 * 60000, err: (/unauthorized_client|access_denied/.test(e.message) ? 'No access to the mailbox: ' : 'Reply check failed: ') + e.message.slice(0, 220) }).catch(() => {}); }
+  });
+
+  // 1c. A letter whose attempt was cut off in the middle (the server stopped, or the record could not be saved) may
+  // already be in the recipient's inbox. Never send it blindly again: look into the Sent folder and record what is true.
+  const cut = await db().collection('sends').where('lock', '>', 0).where('lock', '<=', now - 5 * 60000).orderBy('lock').limit(20).get();
+  await inChunks(cut.docs, 4, async (doc) => {
+    const d = doc.data();
+    try {
+      const run = await runOf(d.cid); if (!run) { await doc.ref.update({ lock: 0 }); return; }
+      const m = await lib.sentSince(fetch, tokens, run.from, d.to, d.lock);
+      if (m) {
+        const i = d.i + 1, plan = lib.watchPlan(run.unitMs), threads = (d.threads || []).concat(d.threadId || [], m.threadId || []).filter((x, n, a) => x && a.indexOf(x) === n);
+        await doc.ref.update(Object.assign({ status: 'active', i, lock: 0, threadId: m.threadId || d.threadId || '', threads, sentAt: (d.sentAt || []).concat([d.lock]), chk: now, errs: 0, err: '' },
+          i < d.steps.length ? { due: d.lock + d.steps[i].wait } : { due: now + plan.every, watchUntil: d.lock + plan.span }));
+        note.recovered = (note.recovered || 0) + 1;
+      } else {
+        await doc.ref.update({ lock: 0 });
+        if (d.status === 'queued' && run.status === 'active' && !(run.queue || []).includes(doc.id)) { run.queue = (run.queue || []).concat([doc.id]); await run.ref.update({ queue: run.queue }); }
+      }
+    } catch (e) { console.error('interrupted letter check failed', doc.id, e.message); }
   });
 
   // 1b. Conversations we answered from a card: when the person writes again, the card asks for an answer.
@@ -361,20 +412,29 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
     const boxRuns = byBox[boxMail].sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0)), tz = (boxRuns[0] || (follow[boxMail] || [])[0].run).tz;
     if (!lib.inWindow(rules, now, tz)) { note.boxes[boxMail] = `outside hours ${rules.from}-${rules.to} in ${tz}`; continue; }
     const today = lib.localParts(now, tz).day, newToday = ms.day === today ? ms.newToday || 0 : 0;
-    let job = (follow[boxMail] || []).sort((a, b) => a.d.due - b.d.due)[0], first = false;
+    let job = (follow[boxMail] || []).filter((x) => !x.d.lock).sort((a, b) => a.d.due - b.d.due)[0], first = false;
     if (!job && newToday < lib.capFor(rules, ms.firstAt, now)) {
       const run = boxRuns.find((r) => (r.queue || []).length);
       if (run) { const id = run.queue[0], doc = await db().collection('sends').doc(id).get(); run.queue = run.queue.slice(1); await run.ref.update({ queue: run.queue, updatedAt: now });
-        if (doc.exists && doc.data().status === 'queued') { job = { doc, d: doc.data(), run }; first = true; } }
+        if (doc.exists && doc.data().status === 'queued' && !doc.data().lock) { job = { doc, d: doc.data(), run }; first = true; } }
+    }
+    // Last look before a letter leaves: is the campaign card still there, is the person still on the list and allowed?
+    if (job) {
+      const why = await stillWanted(job);
+      if (why === 'no card') { await endRun(job.run, now); note.boxes[boxMail] = 'campaign card deleted: run stopped'; continue; }
+      if (why) { await job.doc.ref.update({ status: 'stopped', due: lib.FAR, chk: (job.d.sentAt || []).length ? now : lib.FAR, endedAt: now, err: why }); note.boxes[boxMail] = `skipped ${job.d.to}: ${why}`; continue; }
     }
     if (!job) { note.boxes[boxMail] = `nothing to send (reminders waiting ${(follow[boxMail] || []).length}, new today ${newToday})`; continue; }
     try {
-      await job.doc.ref.update(await lib.sendStep(fetch, tokens, job.d, job.run, Date.now()));
+      await job.doc.ref.update({ lock: now });
+      const out = Object.assign(await lib.sendStep(fetch, tokens, job.d, job.run, Date.now()), { lock: 0 });
+      // The letter is out. Saving that fact must not fail quietly, or the same letter would go again.
+      for (let n = 0; ; n++) { try { await job.doc.ref.update(out); break; } catch (e) { if (n >= 3) { console.error('sent but not recorded', job.doc.id, e.message); break; } await new Promise((r) => setTimeout(r, 400 * (n + 1))); } }
       note.boxes[boxMail] = `sent letter ${job.d.i + 1} to ${job.d.to}`;
       await msRef.set({ firstAt: ms.firstAt || now, lastAt: now, nextAt: now + lib.gapFor(rules, Math.random()), day: today, newToday: newToday + (first ? 1 : 0) }, { merge: true });
     } catch (e) {
       note.boxes[boxMail] = 'failed: ' + e.message.slice(0, 200);
-      await fail(job.doc.ref, job.d, e);
+      await fail(job.doc.ref, job.d, e); await job.doc.ref.update({ lock: 0 }).catch(() => {});
       if (first && (job.d.errs || 0) + 1 < 3) { job.run.queue = job.run.queue.concat([job.doc.id]); await job.run.ref.update({ queue: job.run.queue }); await job.doc.ref.update({ due: lib.FAR }); }
     }
   }

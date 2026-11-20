@@ -252,3 +252,15 @@ Every letter carries an HTML version. A start is refused when a letter uses a fi
 Agreed, not built yet: a Company card works one target company with several people — personal letters per person,
 AI studies the company's site, no A/B/C variants, a reply from one person pauses letters to the others, and the
 card itself moves along the board as the deal.
+
+## 21. Sending: what the server guarantees (tested 20 Nov 2026 on a simulated mailbox)
+
+- Replies are looked for every 10 minutes for everyone with a letter out (hourly after three days), also after a
+  campaign is stopped (for three weeks).
+- Before each letter: the campaign card must exist (otherwise the run stops), the person must still be on the list
+  and not left out, and the address must not be on the starter's forbidden list.
+- One address gets one chain inside a campaign. The start reports how many were skipped as forbidden or repeated.
+- An attempt cut off in the middle is never repeated blindly: the server looks into the Sent folder and records
+  what is true.
+- Not enforced yet: the same person in two different campaigns gets both; a limit per client company per day;
+  a pause at a high share of bounces; auto-replies count as replies; hours are the starter's, not the recipient's.

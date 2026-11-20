@@ -377,6 +377,7 @@
   function runWhy(e) {
     const m = String(e && e.message || e);
     if (/RULE_PRIMARY/.test(m)) return t('runPrimary').replace('{m}', m.split('RULE_PRIMARY ')[1] || '');
+    if (/NOBODY_LEFT/.test(m)) { const [f, d] = (m.split('NOBODY_LEFT ')[1] || '0|0').split('|'); return t('runNobody').replace('{f}', +f || 0).replace('{d}', +d || 0); }
     if (/MAIL_READ/.test(m)) return t('runNoRead') + ' ' + m.replace(/.*MAIL_READ\s*/, '');
     if (/EMPTY_FIELDS/.test(m)) return t('runHoles') + ' ' + m.replace(/.*EMPTY_FIELDS\s*/, '').split(',').map((x) => { const [l, f, n] = x.split('|'); return t('runHole').replace('{l}', l).replace('{f}', '{{' + f + '}}').replace('{n}', n); }).join('; ') + '. ' + t('runHolesFix');
     if (/MAIL_ACCESS/.test(m)) return t('runNoAccess') + ' ' + m.replace(/.*MAIL_ACCESS\s*/, '');
@@ -396,7 +397,7 @@
       <div class="acts tight">${live ? `<button class="btn ghost sm danger" data-act="runStop">${t('runStopBtn')}</button>` : ''}<button class="link small" data-act="runRefresh">${t('runRefresh')}</button></div>
       <table class="ltable"><tr><th>${t('email')}</th><th>${t('variant')}</th><th>${t('runSent')}</th><th>${t('runState')}</th><th>${t('runNext')}</th></tr>
       ${(r.rows || []).map((x) => `<tr><td>${esc(x.to)}</td><td>${esc(x.variant)}</td><td>${x.sent} / ${x.of}</td><td><span class="chk ${x.status === 'replied' ? 'yes' : x.status === 'error' || x.status === 'bounced' ? 'unsure' : ''}">${t('run_' + x.status)}</span>${x.err ? `<small class="ev" title="${esc(x.err)}">${esc(x.err)}</small>` : ''}</td><td>${x.next ? time(x.next) : ''}</td></tr>`).join('')}</table>
-      ${live ? `<p class="sub small">${t('runLive')}</p>` : ''}</div>`;
+      ${ui.runSkip && ui.runSkip.cid === c.id ? `<p class="sub small">${t('runSkipped').replace('{f}', ui.runSkip.forbidden).replace('{d}', ui.runSkip.dupes)}</p>` : ''}${live ? `<p class="sub small">${t('runLive')}</p>` : ''}</div>`;
   }
   // Step 4: from which mailbox, by which rules, and what is still missing before the start.
   function vSend(c) {
@@ -960,7 +961,7 @@
     // In the topic settings: AI reads the brief of this topic and fills in the criterion, the tag and the words.
     topicCrit() {
       const it = curParam(); if (!CLOUD || ui.critBusy) return; ui.critBusy = true; commit();
-      setTimeout(() => Cloud.criterion({ topic: it.id }).then((r) => { ui.critBusy = false; it.s.crit = r.criterion || ''; it.s.tag = r.tag || ''; it.s.terms = (r.terms || []).join(', '); commit(); },
+      setTimeout(() => Cloud.criterion({ topic: it.id }).then((r) => { ui.critBusy = false; const p = item('topic', it.id) || it; p.s.crit = r.criterion || ''; p.s.tag = r.tag || ''; p.s.terms = (r.terms || []).join(', '); commit(); },
         (e) => { ui.critBusy = false; ui.err = String(e && e.message || e); ui.errAi = true; render(); }), 1800);
     },
     rf(d) { ui.rf = d.v; render(); },
@@ -1023,7 +1024,7 @@
       if (!ui.runArm) { ui.runArm = true; render(); return; }
       ui.runArm = false; ui.run = { cid: c.id, busy: true }; if (c.stage === 'new') c.stage = 'contacted'; commit();
       setTimeout(() => Cloud.fn('campaignStart', { cardId: c.id, tz: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' }, 130000)
-        .then(() => runPoll(c.id), (e) => { ui.run = { cid: c.id, err: runWhy(e) }; render(); }), 2200);
+        .then((r) => { ui.runSkip = r && (r.forbidden || r.dupes) ? { cid: c.id, forbidden: r.forbidden || 0, dupes: r.dupes || 0 } : null; runPoll(c.id); }, (e) => { ui.run = { cid: c.id, err: runWhy(e) }; render(); }), 2200);
     },
     runStop() { const c = cur(); if (!ui.stopArm) { ui.stopArm = true; render(); setTimeout(() => { ui.stopArm = false; }, 6000); return; } ui.stopArm = false;
       Cloud.fn('campaignStop', { cardId: c.id }).then(() => runPoll(c.id), (e) => { ui.err = runWhy(e); ui.errAi = true; render(); }); },
