@@ -75,9 +75,12 @@
   }
   // Keeps the access lists that the server checks in step with the settings people actually edit.
   function normalize() {
-    S.zones.company.forEach((co) => { if (co.access || co.managers) co.acl = uniq(Object.keys(co.access || {}).concat(managersOf(co))); });
-    S.vectors.forEach((v) => { const co = item('company', v.company); if (co && (v.owner === au.uid || manages(co))) v.acl = uniq([v.owner].concat(v.members || [], managersOf(co))); });
-    S.zones.direction.forEach((d) => { const co = item('company', d.company); if (co && co.acl) d.acl = co.acl.slice(); });
+    // A list with the same people in another order is left as it is, and only someone who manages a company
+    // rewrites its list: otherwise an operator's program would try to "fix" the order and the server would refuse the save.
+    const keep = (old, next) => (old && old.length === next.length && next.every((x) => old.includes(x)) ? old : next);
+    S.zones.company.forEach((co) => { if ((co.access || co.managers) && (!CLOUD || manages(co) || !co.acl)) co.acl = keep(co.acl, uniq(Object.keys(co.access || {}).concat(managersOf(co)))); });
+    S.vectors.forEach((v) => { const co = item('company', v.company); if (co && (v.owner === au.uid || manages(co))) v.acl = keep(v.acl, uniq([v.owner].concat(v.members || [], managersOf(co)))); });
+    S.zones.direction.forEach((d) => { const co = item('company', d.company); if (co && co.acl && (!CLOUD || manages(co) || !d.acl)) d.acl = keep(d.acl, co.acl.slice()); });
     ['audience', 'topic'].forEach((z) => S.zones[z].forEach((it) => { if (!it.acl) it.acl = ['*']; }));
     const aclFor = (c, type) => {
       const v = S.vectors.find((x) => x.id === c.vid), co = v && item('company', v.company); if (!v || !co) return c.acl || [];
@@ -85,9 +88,9 @@
       if (type !== 'task' && co.access) Object.keys(co.access).forEach((u) => { if (co.access[u] === 'shared' && !a.includes(u)) a.push(u); });
       return a;
     };
-    S.cards.forEach((c) => { c.acl = aclFor(c, c.type); if (!c.owner) { const v = S.vectors.find((x) => x.id === c.vid); if (v) c.owner = v.owner; } });
-    S.gdocs.forEach((g) => { g.acl = aclFor(g, 'doc'); });
-    S.leads.forEach((l) => { l.acl = aclFor(l, 'lead'); });
+    S.cards.forEach((c) => { c.acl = keep(c.acl, aclFor(c, c.type)); if (!c.owner) { const v = S.vectors.find((x) => x.id === c.vid); if (v) c.owner = v.owner; } });
+    S.gdocs.forEach((g) => { g.acl = keep(g.acl, aclFor(g, 'doc')); });
+    S.leads.forEach((l) => { l.acl = keep(l.acl, aclFor(l, 'lead')); });
     // One marker per contact email, so another manager's program can tell the contact is already in work without seeing it.
     const mine = {};
     S.cards.forEach((c) => { const e = String(c.f.email || '').trim().toLowerCase(); if (c.type === 'contact' && c.owner === au.uid && e && !blockedWhy(c) && c.okEmail === e && c.vec && c.vec.company) mine[takenId(c.vec.company, e)] = { id: takenId(c.vec.company, e), company: c.vec.company, email: e, owner: au.uid }; });
