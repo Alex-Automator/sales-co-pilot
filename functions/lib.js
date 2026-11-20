@@ -300,8 +300,10 @@ function inlineImages(html) {
 }
 // A letter in the form Gmail accepts: plain text, or plain text plus an HTML version when the mailbox has an HTML signature.
 // body is the letter itself; sig is the plain signature (and opt-out line); sigHtml replaces sig in the HTML version.
-function rawMail({ from, to, subject, body, sig, sigHtml, foot, replyTo }) {
-  const head = [`From: ${from}`, `To: ${to}`, `Subject: ${mimeWord(String(subject || ''))}`].concat(replyTo ? [`In-Reply-To: ${replyTo}`, `References: ${replyTo}`] : [], ['MIME-Version: 1.0']);
+function rawMail({ from, fromName, to, subject, body, sig, sigHtml, foot, replyTo }) {
+  // The sender's name is shown by mail programs instead of the bare address.
+  const who = String(fromName || '').replace(/[\r\n<>"]/g, ' ').trim().slice(0, 80), ascii = /^[\x20-\x7e]*$/.test(who);
+  const head = [`From: ${who ? (ascii ? '"' + who.replace(/\\/g, '') + '"' : mimeWord(who)) + ' <' + from + '>' : from}`, `To: ${to}`, `Subject: ${mimeWord(String(subject || ''))}`].concat(replyTo ? [`In-Reply-To: ${replyTo}`, `References: ${replyTo}`] : [], ['MIME-Version: 1.0']);
   const text = [String(body || '').replace(/\s+$/, ''), String(sig || '').trim(), String(foot || '').trim()].filter(Boolean).join('\n\n').replace(/\r?\n/g, '\r\n'), plain = ['Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', b64lines(text)];
   const hsig = cleanSig(sigHtml);
   if (!hsig) return b64url(head.concat(plain).join('\r\n'));
@@ -392,7 +394,7 @@ const gapFor = (rules, rnd) => { const a = Math.max(1, +rules.gapMin || 10), b =
 // Sends the next letter of one recipient's chain. Returns the fields to save on the send record.
 async function sendStep(fetchFn, tokens, d, run, now) {
   const step = d.steps[d.i], plan = watchPlan(run.unitMs);
-  const sent = await sendMail(fetchFn, { from: run.from, to: d.to, subject: step.subject, body: step.body, sig: run.sig, sigHtml: run.sigHtml, foot: run.foot, threadId: d.threadId || undefined, replyTo: d.firstMsgId || undefined }, tokens);
+  const sent = await sendMail(fetchFn, { from: run.from, fromName: run.fromName || '', to: d.to, subject: step.subject, body: step.body, sig: run.sig, sigHtml: run.sigHtml, foot: run.foot, threadId: d.threadId || undefined, replyTo: d.firstMsgId || undefined }, tokens);
   const out = { status: 'active', i: d.i + 1, threadId: sent.threadId || d.threadId || '', sentAt: (d.sentAt || []).concat([now]), errs: 0, err: '' };
   if (d.i === 0) out.firstMsgId = await messageId(fetchFn, tokens, run.from, sent.id).catch(() => '');
   if (out.i < d.steps.length) out.due = now + d.steps[out.i].wait; else { out.due = now + plan.every; out.watchUntil = now + plan.span; }

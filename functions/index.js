@@ -121,7 +121,7 @@ exports.mailTest = onCall({ timeoutSeconds: 60, memory: '256MiB' }, async (req) 
   await countUse(uid, 'm', 30);
   const sig = box.sig || '';
   try {
-    const r = await lib.sendMail(fetch, { from: box.email, to, sigHtml: box.sigHtml || '', subject: 'VECTOR: test letter from ' + box.email,
+    const r = await lib.sendMail(fetch, { from: box.email, fromName: box.name || (user.data() || {}).name || '', to, sigHtml: box.sigHtml || '', subject: 'VECTOR: test letter from ' + box.email,
       sig, body: 'This is a test letter from VECTOR.\n\nIf you are reading it, the program can send mail from ' + box.email + '.\nЦе тестовий лист із VECTOR: надсилання з цієї скриньки працює.' });
     return { ok: true, to, id: r.id };
   } catch (e) {
@@ -180,7 +180,7 @@ exports.campaignStart = onCall({ timeoutSeconds: 120, memory: '512MiB' }, async 
   }
   const runRef = db().collection('runs').doc(d.cardId), prev = await runRef.get();
   const queue = (prev.exists && prev.data().status === 'active' ? (prev.data().queue || []).filter((x) => !ids.includes(x)) : []).concat(ids);
-  await runRef.set({ cid: d.cardId, vid: card.vid, owner: uid, acl: card.acl || [], cardTitle: card.title || '', cardVec: card.vec || {}, from: box.email, sig: box.sig || '', sigHtml: box.sigHtml || '',
+  await runRef.set({ cid: d.cardId, vid: card.vid, owner: uid, acl: card.acl || [], cardTitle: card.title || '', cardVec: card.vec || {}, from: box.email, fromName: box.name || user.name || '', sig: box.sig || '', sigHtml: box.sigHtml || '',
     foot: optOn ? (v.opt && v.opt.text) || '' : '', tz: String(d.tz || 'UTC').slice(0, 60), unitMs, status: 'active', startedAt: prev.exists ? prev.data().startedAt || now : now, updatedAt: now, queue });
   return { queued: fresh.length, already: plan.length - fresh.length, from: box.email };
 });

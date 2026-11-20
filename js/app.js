@@ -605,6 +605,7 @@
         <span class="lt">${esc(m.email)}${CLOUD && m.owner !== au.uid ? ` <small class="ownr">${esc(userName(m.owner))}</small>` : ''}</span>${m.primary ? `<span class="ty">${t('primary')}</span>` : ''}<button class="link" data-act="mbRemove" data-i="${i}">×</button></div>
         <div class="acts tight"><button class="btn ghost sm" data-act="mbTest" data-i="${i}" ${CLOUD && !ui.mbBusy ? '' : 'disabled'} title="${CLOUD ? t('mbTestHint') : t('aiDemoOnly')}">${ui.mbBusy === m.email ? t('aiBusy') : t('mbTest')}</button>
           ${ui.mbRes && ui.mbRes.email === m.email ? `<span class="sub small ${ui.mbRes.ok ? 'okc' : 'errc'}">${esc(ui.mbRes.text)}</span>` : ''}</div>
+        <input class="in" data-mbname="${i}" value="${esc(m.name || '')}" placeholder="${t('mbName')}" title="${t('mbNameHint')}">
         <textarea class="in" rows="3" data-mbsig="${i}" placeholder="${t('mbSignature')}">${esc(m.sig || '')}</textarea>
         <details class="sigh" ${m.sigHtml || ui.sigOpen === m.email ? 'open' : ''}><summary>${t('sigHtml')}</summary><p class="sub small">${t('sigHtmlNote')}</p>
           <textarea class="in mono" rows="4" data-mbsightml="${i}" placeholder="<table>…</table>">${esc(m.sigHtml || '')}</textarea>
@@ -1159,6 +1160,7 @@
     if (el.dataset.lgcolor) { legendOf(el.dataset.lgcolor).color = el.value; save(); return; }
     if (p && el.dataset.mbsightml) { const m = p.s.mailboxes[+el.dataset.mbsightml]; m.sigHtml = el.value.slice(0, 80000); ui.sigOpen = m.email; save(); return; }
     if (p && el.dataset.mbfoot) { p.s.mailboxes[+el.dataset.mbfoot].foot = el.value; save(); return; }
+    if (p && el.dataset.mbname) { p.s.mailboxes[+el.dataset.mbname].name = el.value.slice(0, 80); save(); return; }
     if (p && el.dataset.mbsig) { p.s.mailboxes[+el.dataset.mbsig].sig = el.value; save(); return; }
     if (p && el.dataset.s) { p.s[el.dataset.s] = el.value; save(); return; }
     if (p && el.hasAttribute('data-pname')) { p.name = el.value; save(); return; }
