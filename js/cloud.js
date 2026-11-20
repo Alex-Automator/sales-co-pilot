@@ -91,9 +91,17 @@ const Cloud = (function () {
     // "Already in work" markers go in their own batch, so a clash there can never block saving the real data.
     [ops.filter((o) => o[1] !== 'taken'), ops.filter((o) => o[1] === 'taken')].forEach((group) => {
       for (let i = 0; i < group.length; i += 400) {
-        const b = db.batch();
-        group.slice(i, i + 400).forEach((o) => { const ref = db.collection(o[1]).doc(o[2]); if (o[0] === 'set') b.set(ref, o[3]); else b.delete(ref); });
-        b.commit().catch(fail);
+        const part = group.slice(i, i + 400), b = db.batch();
+        const one = (o) => { const ref = db.collection(o[1]).doc(o[2]); return o[0] === 'set' ? ref.set(o[3]) : ref.delete(); };
+        part.forEach((o) => { const ref = db.collection(o[1]).doc(o[2]); if (o[0] === 'set') b.set(ref, o[3]); else b.delete(ref); });
+        // If the server refuses the batch, each change is tried on its own: what is allowed gets saved,
+        // and the message names exactly what was refused instead of blocking everything.
+        b.commit().catch(() => Promise.all(part.map((o) => one(o).then(() => null, (e) => ({ o, e })))).then((res) => {
+          const bad = res.filter(Boolean); if (!bad.length) return;
+          const label = (o) => o[1] + ': ' + ((o[3] && (o[3].name || o[3].title || (o[3].f && o[3].f.email))) || o[2]) + (o[0] === 'del' ? ' (delete)' : '');
+          const err = new Error(bad.slice(0, 4).map((x) => label(x.o)).join('; ') + (bad.length > 4 ? ` … +${bad.length - 4}` : '') + ' — ' + (bad[0].e && bad[0].e.message ? bad[0].e.message : bad[0].e));
+          err.refused = bad.length; fail(err);
+        }));
       }
     });
   }
