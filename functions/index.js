@@ -222,12 +222,71 @@ exports.campaignStop = onCall({ timeoutSeconds: 60, memory: '256MiB' }, async (r
   return { stopped: live.length };
 });
 
+// convo({ cardId, op }) works with the conversation behind a contact card.
+//   op 'read'  -> { box, to, messages }        the letters exchanged with this person
+//   op 'draft' -> { body } or { need }         AI writes an answer to their last letter ({ engine, comment, draft, ui })
+//   op 'send'  -> { ok, at }                   sends { body } as an answer in the same thread, from the same mailbox
+// Only the owner of the mailbox (or the super admin) can read and answer: it is their correspondence.
+exports.convo = onCall({ secrets: [ANTHROPIC_API_KEY, OPENAI_API_KEY], timeoutSeconds: 120, memory: '256MiB' }, async (req) => {
+  const { uid, d, card, superAdmin, user } = await cardGuard(req);
+  if (!['read', 'draft', 'send'].includes(d.op)) throw new HttpsError('invalid-argument', 'Unknown request.');
+  const to = String((card.f || {}).email || '').trim().toLowerCase();
+  if (card.type !== 'contact' || !to) throw new HttpsError('failed-precondition', 'NO_CONVO');
+  let m = card.mail && card.mail.box ? card.mail : null;
+  if (!m && card.parent) {
+    const [snap, run] = await Promise.all([sendsOf(card.parent), db().collection('runs').doc(card.parent).get()]);
+    const s = snap.docs.map((x) => x.data()).find((x) => String(x.to || '').toLowerCase() === to && (x.sentAt || []).length);
+    if (s && run.exists) m = { box: run.data().from, threads: (s.threads || []).concat(s.threadId || []).filter((x, i, a) => x && a.indexOf(x) === i), since: s.sentAt[0] };
+  }
+  if (!m) throw new HttpsError('failed-precondition', 'NO_CONVO');
+  const vec = await db().collection('vectors').doc(String(card.vid || '-')).get(), v = vec.exists ? vec.data() : {}, co = await param(v.company);
+  const box = (((co.s || {}).mailboxes) || []).find((x) => x.email === m.box);
+  if (!box) throw new HttpsError('failed-precondition', `The mailbox ${m.box} is no longer in the company settings.`);
+  if (!superAdmin && box.owner !== uid) throw new HttpsError('permission-denied', `CONVO_OWNER ${m.box}`);
+  const tokens = {};
+  let messages;
+  try { messages = await lib.convo(fetch, tokens, m.box, to, m.since, m.threads); }
+  catch (e) { console.error('convo read failed', e.message); throw new HttpsError('failed-precondition', (/unauthorized_client|access_denied/.test(e.message) ? 'MAIL_READ ' : '') + e.message.slice(0, 300)); }
+  const view = messages.map((x) => ({ me: x.me, from: x.from, at: x.at, subject: x.subject, text: x.text }));
+  if (d.op === 'read') return { box: m.box, to, messages: view };
+
+  if (d.op === 'draft') {
+    if (!messages.some((x) => !x.me)) throw new HttpsError('failed-precondition', 'There is no letter from this person to answer yet.');
+    await countUse(uid, 'n', lib.LIMITS.perUserPerDay);
+    const [direction, audience, topic, shared] = await Promise.all([param(v.direction), param(v.audience), param(v.topic), db().collection('workspace').doc('shared').get()]);
+    const docs = ((shared.exists && shared.data().docs) || []).filter((x) => !x.company || x.company === v.company).sort((a, b) => (a.priority || 9) - (b.priority || 9));
+    try {
+      return await lib.reply(fetch, { claude: ANTHROPIC_API_KEY.value().trim(), gpt: OPENAI_API_KEY.value().trim() }, { engine: d.engine === 'gpt' ? 'gpt' : 'claude', ui: d.ui === 'uk' ? 'uk' : 'en', company: co, direction, audience, topic, docs,
+        card: { title: '', notes: card.notes }, person: { name: card.title, jobTitle: (card.f || {}).jobTitle, company: (card.f || {}).company }, myName: box.name || user.name || '', messages, comment: d.comment, draft: d.draft });
+    } catch (e) { console.error('convo draft failed', e.message); throw new HttpsError('internal', e.message.slice(0, 300)); }
+  }
+
+  const body = String(d.body || '').replace(/\r/g, '').trim();
+  if (!body) throw new HttpsError('invalid-argument', 'The letter is empty.');
+  if (body.length > 8000) throw new HttpsError('invalid-argument', 'The letter is too long.');
+  if (/\{\{\s*\w+\s*\}\}|\[\[/.test(body)) throw new HttpsError('invalid-argument', 'CONVO_VARS');
+  await countUse(uid, 'r', 100);
+  // The answer goes under the person's last letter; if they have not written yet, under our last one.
+  const last = messages.filter((x) => !x.me).slice(-1)[0] || messages.slice(-1)[0], now = Date.now();
+  const subject = last ? 'Re: ' + String(last.subject || '').replace(/^(\s*(re|fwd?|aw|wg)\s*:\s*)+/i, '') : String(d.subject || '').trim();
+  if (!subject) throw new HttpsError('invalid-argument', 'The subject is empty.');
+  let sent;
+  try { sent = await lib.sendMail(fetch, { from: m.box, fromName: box.name || user.name || '', to, subject, body, sig: box.sig || '', sigHtml: box.sigHtml || '', threadId: last ? last.thread : undefined, replyTo: last ? last.msgId || undefined : undefined }, tokens); }
+  catch (e) { console.error('convo send failed', e.message); throw new HttpsError('failed-precondition', (/unauthorized_client|access_denied/.test(e.message) ? 'MAIL_ACCESS ' : '') + e.message.slice(0, 300)); }
+  const threads = (m.threads || []).concat(last ? last.thread : [], sent.threadId || []).filter((x, i, a) => x && a.indexOf(x) === i);
+  await db().collection('cards').doc(d.cardId).update({ mail: { box: m.box, threads, since: m.since || now }, awaiting: false }).catch(() => {});
+  // From now on the server watches for their next letter and raises the flag on the card.
+  await db().collection('convos').doc(d.cardId).set({ cid: d.cardId, box: m.box, to, since: now, due: now + 10 * 60000, until: now + 30 * 86400000 });
+  return { ok: true, at: now, mail: { box: m.box, threads, since: m.since || now } };
+});
+
 // A reply turns the recipient into a contact card on the board, in the Replied column, linked to its campaign.
 async function replyCard(d, run, ref) {
   const id = 'k' + ref.id.replace(/[^a-zA-Z0-9]/g, '').slice(-14) + Date.now().toString(36);
   await db().collection('cards').doc(id).set({ id, vid: run.vid, owner: run.owner, acl: run.acl || [], ord: Date.now(), type: 'contact', stage: 'replied', title: d.name || d.company || d.to, vec: run.cardVec || {}, parent: d.cid,
     f: { jobTitle: d.jobTitle || '', company: d.company || '', email: d.to, phone: '', linkedin: '' }, next: { text: 'Answer the reply', date: new Date().toISOString().slice(0, 10) }, awaiting: true,
-    auto: { follow: false, reply: false, notify: true, draft: true }, notes: `Replied to the campaign "${run.cardTitle}" (variant ${d.variant}, after letter ${d.i}).`, photo: '', blocked: '', okEmail: d.to, tags: d.tags || [] });
+    auto: { follow: false, reply: false, notify: true, draft: true }, notes: `Replied to the campaign "${run.cardTitle}" (variant ${d.variant}, after letter ${d.i}).`, photo: '', blocked: '', okEmail: d.to, tags: d.tags || [],
+    mail: { box: run.from, threads: (d.threads || []).concat(d.threadId || []).filter((x, i, a) => x && a.indexOf(x) === i), since: (d.sentAt || [])[0] || Date.now() } });
   await db().collection('leads').doc(d.lead).set({ card: id, replied: true }, { merge: true }).catch(() => {});
 }
 
@@ -253,6 +312,19 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
       const plan = lib.watchPlan(run.unitMs);
       await doc.ref.update(now > (d.watchUntil || 0) ? { status: 'done', due: lib.FAR, endedAt: now } : { due: now + plan.every });
     } catch (e) { await fail(doc.ref, d, e); }
+  });
+
+  // 1b. Conversations we answered from a card: when the person writes again, the card asks for an answer.
+  const talks = await db().collection('convos').where('due', '<=', now).orderBy('due').limit(60).get();
+  await inChunks(talks.docs, 6, async (doc) => {
+    const c = doc.data();
+    try {
+      if (await lib.wroteBack(fetch, tokens, c.box, c.to, c.since)) {
+        await db().collection('cards').doc(c.cid).update({ awaiting: true, next: { text: 'Answer the reply', date: new Date().toISOString().slice(0, 10) } }).catch(() => {});
+        await doc.ref.delete(); return; }
+      if (now > c.until) { await doc.ref.delete(); return; }
+      await doc.ref.update({ due: now + (now - c.since < 86400000 ? 10 * 60000 : 2 * 3600000) });
+    } catch (e) { console.error('convo watch failed', doc.id, e.message); await doc.ref.update({ due: now + 30 * 60000 }).catch(() => {}); }
   });
 
   // 2. Each mailbox: one letter per run of this function, a reminder first, then the next person in the queue.

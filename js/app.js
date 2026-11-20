@@ -506,7 +506,42 @@
   const fillVars = (text, r) => optional(text, r).replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => (k === 'myName' ? S.user.name : k === 'signature' ? r.signature || '' : r[k]) || (k === 'signature' ? '' : m));
   // The signature of the chosen mailbox goes at the end of every letter, unless the text places {{signature}} itself.
   const withSig = (body, sig) => (!sig || /\{\{\s*signature\s*\}\}/.test(body) ? body : body.replace(/\s+$/, '') + '\n\n{{signature}}');
+  // A contact who already answered: the letters exchanged so far and an answer written here, sent in the same thread.
+  const hasConvo = (c) => CLOUD && c.type === 'contact' && !!(c.parent || c.mail) && !!String(c.f.email || '').trim();
+  function convoLoad(cid, quiet) {
+    if (!quiet) { ui.convo = { cid, loading: true }; render(); }
+    Cloud.fn('convo', { cardId: cid, op: 'read' }, 60000).then((r) => { if (ui.open !== cid) return; ui.convo = Object.assign({ cid }, r); render(); },
+      (e) => { if (ui.open !== cid) return; ui.convo = { cid, err: convoWhy(e) }; render(); });
+  }
+  function convoWhy(e) {
+    const m = String((e && e.message) || e);
+    if (/NO_CONVO/.test(m)) return t('cvNone');
+    if (/CONVO_OWNER/.test(m)) return t('cvOwner').replace('{m}', m.split('CONVO_OWNER ')[1] || '');
+    if (/CONVO_VARS/.test(m)) return t('cvVars');
+    if (/MAIL_READ/.test(m)) return t('runNoRead') + ' ' + m.replace(/.*MAIL_READ\s*/, '');
+    if (/MAIL_ACCESS/.test(m)) return t('runNoAccess') + ' ' + m.replace(/.*MAIL_ACCESS\s*/, '');
+    return aiWhy(e);
+  }
+  function vConvo(c) {
+    const cv = ui.convo && ui.convo.cid === c.id ? ui.convo : null;
+    if (!cv) { setTimeout(() => { if (ui.open === c.id && !(ui.convo && ui.convo.cid === c.id)) convoLoad(c.id); }, 0); return `<p class="sub">${t('cvLoading')}</p>`; }
+    if (cv.loading) return `<p class="sub">${t('cvLoading')}</p>`;
+    if (cv.err) return `<div class="revbox"><b>${t('cvFailed')}</b><small>${esc(cv.err)}</small><div class="acts tight"><button class="btn ghost sm" data-act="cvRefresh">${t('runRefresh')}</button></div></div>`;
+    const when = (ms) => new Date(ms).toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const seq = seqOf(c), own = c.reply != null ? c.reply : '', busy = ui.cvBusy;
+    const msgs = (cv.messages || []).map((m) => `<div class="cvm ${m.me ? 'me' : ''}"><small>${m.me ? t('cvMe') : esc(String(m.from).replace(/<.*>/, '').replace(/"/g, '').trim() || cv.to)} · ${when(m.at)}${m.subject ? ' · ' + esc(m.subject) : ''}</small><pre>${esc(m.text || '')}</pre></div>`).join('') || `<p class="sub">${t('cvEmpty')}</p>`;
+    const need = ui.cvNeed && ui.cvNeed.cid === c.id ? `<div class="revbox"><b>${t('needTitle')}</b><ul>${ui.cvNeed.list.map((q) => `<li>${esc(q)}</li>`).join('')}</ul><small>${t('cvNeedNote')}</small></div>` : '';
+    return `<div class="seqhead"><span class="sub small">${t('cvWith')} ${esc(cv.to)} · ${t('fromMailbox')} ${esc(cv.box)}</span><button class="link small" data-act="cvRefresh">${t('runRefresh')}</button></div>
+      <div class="cvlist">${msgs}</div>
+      <div class="step"><div class="bh">${t('cvYour')}</div>
+        <textarea class="in" rows="7" data-cvreply placeholder="${t('cvPh')}">${esc(own)}</textarea>
+        <div class="acts tight"><button class="btn ghost sm" data-act="cvDraft" data-e="claude" ${busy ? 'disabled' : ''}>${busy === 'claude' ? t('aiBusy') : t('cvAi') + ' · Claude'}</button><button class="btn ghost sm" data-act="cvDraft" data-e="gpt" ${busy ? 'disabled' : ''}>${busy === 'gpt' ? t('aiBusy') : t('cvAi') + ' · ChatGPT'}</button>
+          <span class="grow"></span>${ui.cvSent === c.id ? `<span class="sub small okc">${t('cvSent')}</span>` : ''}<button class="btn sm ${ui.cvArm ? 'danger' : ''}" data-act="cvSend" ${busy || !String(own).trim() ? 'disabled' : ''}>${busy === 'send' ? t('aiBusy') : ui.cvArm ? t('cvSendSure') : t('cvSend')}</button></div>
+        <input class="in" data-cvnote value="${esc(ui.cvNote || '')}" placeholder="${t('cvNotePh')}">${need}
+        <p class="sub small">${t('cvHint')}</p></div>`;
+  }
   function vSequence(c) {
+    if (hasConvo(c)) return vConvo(c);
     const seq = seqOf(c), v = S.vectors.find((x) => x.id === c.vid), co = v ? item('company', v.company) : null, mbs = myMailboxes(co);
     const from = mbs.length ? `<select class="in" data-seqfrom>${mbs.map((m) => `<option ${((seq.from || primaryMailbox(co)) === m.email) ? 'selected' : ''}>${esc(m.email)}</option>`).join('')}</select>` : `<span class="sub">${t('noMailbox')}</span>`;
     const list = stepsOf(c), vs = varsOf(seq), k = curVar(seq), nextV = ['B', 'C'].find((x) => !seq.alt[x]);
@@ -880,6 +915,24 @@
     signOut() { ui.menu = null; Cloud.signOut(); },
     usersOpen() { ui.edit = { kind: 'users' }; render(); },
     errClose() { ui.err = ''; ui.errAi = false; render(); },
+    cvRefresh() { if (cur()) convoLoad(cur().id); },
+    cvDraft(d) {
+      const c = cur(); if (!c || ui.cvBusy) return; ui.cvBusy = d.e === 'gpt' ? 'gpt' : 'claude'; ui.cvNeed = null; ui.cvArm = false; render();
+      Cloud.fn('convo', { cardId: c.id, op: 'draft', engine: ui.cvBusy, comment: ui.cvNote || '', draft: c.reply || '', ui: S.lang }, 130000).then((r) => {
+        ui.cvBusy = ''; if (r.need) ui.cvNeed = { cid: c.id, list: r.need }; else { c.reply = r.body; save(); } render();
+      }, (e) => { ui.cvBusy = ''; ui.err = convoWhy(e); ui.errAi = true; render(); });
+    },
+    // The first press arms the button, the second one sends: a letter cannot be taken back.
+    cvSend() {
+      const c = cur(); if (!c || ui.cvBusy || !String(c.reply || '').trim()) return;
+      if (!ui.cvArm) { ui.cvArm = true; render(); return; }
+      ui.cvArm = false; ui.cvBusy = 'send'; render();
+      Cloud.fn('convo', { cardId: c.id, op: 'send', body: c.reply }, 70000).then((r) => {
+        if (r && r.mail) c.mail = r.mail;
+        ui.cvBusy = ''; ui.cvSent = c.id; c.reply = ''; c.awaiting = false; if (c.next && c.next.text === 'Answer the reply') c.next = { text: '', date: '' };
+        commit(); convoLoad(c.id, true);
+      }, (e) => { ui.cvBusy = ''; ui.err = convoWhy(e); ui.errAi = true; render(); });
+    },
     seed() { S.zones = demoState().zones; let n = 0; ZONES.forEach((z) => S.zones[z].forEach((it) => { it.ord = ++n; it.by = au.uid; if (z === 'company') { it.s.mailboxes = []; it.access = {}; it.access[au.uid] = 'shared'; } })); commit(); },
     vecMember(d) {
       const v = S.vectors.find((x) => x.id === ui.edit.id); v.members = v.members || [];
@@ -1168,6 +1221,8 @@
     if (p && el.dataset.s) { p.s[el.dataset.s] = el.value; save(); return; }
     if (p && el.hasAttribute('data-pname')) { p.name = el.value; save(); return; }
     if (!c) return;
+    if (el.hasAttribute('data-cvreply')) { const was = !!String(c.reply || '').trim(); c.reply = el.value; ui.cvArm = false; ui.cvSent = ''; save(); if (was !== !!el.value.trim()) render(); return; }
+    if (el.hasAttribute('data-cvnote')) { ui.cvNote = el.value; return; }
     if (el.dataset.f) c.f[el.dataset.f] = el.value;
     else if (el.dataset.next) c.next[el.dataset.next] = el.value;
     else if (el.dataset.top === 'title' || el.dataset.top === 'notes') c[el.dataset.top] = el.value;

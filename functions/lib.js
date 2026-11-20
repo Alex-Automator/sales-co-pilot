@@ -372,6 +372,56 @@ async function sendState(fetchFn, tokens, mailbox, d) {
   return st;
 }
 
+// ---------- Conversation with one person ----------
+const b64dec = (x) => Buffer.from(String(x || '').replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+const partOf = (p, mime) => { if (!p) return ''; if (p.mimeType === mime && p.body && p.body.data) return b64dec(p.body.data); for (const c of p.parts || []) { const x = partOf(c, mime); if (x) return x; } return ''; };
+const headOf = (m, name) => ((((m.payload || {}).headers || []).find((h) => h.name.toLowerCase() === name) || {}).value || '');
+// The new text of a letter, without the quoted earlier letters below it.
+function unquote(text) {
+  const out = [];
+  for (const line of String(text || '').replace(/\r/g, '').split('\n')) {
+    const l = line.trim();
+    if (/^>/.test(l) || /^-{2,}\s*(original|forwarded|исходное|пересылаемое|оригінал)/i.test(l) || /^_{6,}$/.test(l)) break;
+    if (/^(on|le|am|el|il|w dniu)\b.{4,160}(wrote|écrit|schrieb|escribió|ha scritto|pisze)\s*:?$/i.test(l)) break;
+    if (/^.{0,60}\d{4}.{0,40}<?[\w.+-]+@[\w.-]+>?.{0,10}:$/.test(l) || /^(from|от|від)\s*:\s.*@/i.test(l)) break;
+    out.push(line);
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+function mailText(m) { const plain = partOf(m.payload, 'text/plain'); return unquote(plain || pageText(partOf(m.payload, 'text/html').replace(/<br\s*\/?>|<\/(p|div)>/gi, '\n'))).slice(0, 4000); }
+// Everything said between the mailbox and one person since the first letter: the known threads plus any other
+// thread where the person wrote. Oldest first, at most the last 10 letters.
+async function convo(fetchFn, tokens, mailbox, addr, sinceMs, threadIds) {
+  const token = await tokenFor(fetchFn, tokens, mailbox, READ), a = String(addr || '').replace(/[^\w.+\-@]/g, '');
+  const found = await getJson(fetchFn, GMAIL + 'messages?maxResults=20&includeSpamTrash=true&q=' + encodeURIComponent(`from:${a} after:${Math.floor((sinceMs || 0) / 1000) - 120}`), token);
+  const ids = (threadIds || []).concat((found.messages || []).map((m) => m.threadId)).filter((x, i, arr) => x && arr.indexOf(x) === i).slice(0, 4), all = [];
+  for (const id of ids) {
+    const d = await getJson(fetchFn, GMAIL + 'threads/' + id + '?format=full', token);
+    (d.messages || []).forEach((m) => { const from = headOf(m, 'from'); if (/mailer-daemon|postmaster/i.test(from)) return;
+      all.push({ thread: id, at: +m.internalDate || 0, me: from.toLowerCase().includes(mailbox.toLowerCase()), from, subject: headOf(m, 'subject'), msgId: headOf(m, 'message-id'), text: mailText(m) }); });
+  }
+  return all.sort((x, y) => x.at - y.at).slice(-10);
+}
+function replyPrompt(ctx) {
+  const talk = (ctx.messages || []).map((m) => `${m.me ? 'WE WROTE' : 'THEY WROTE'}:\n${m.text}`).join('\n\n');
+  return {
+    system: `You help a B2B company answer a potential client who replied to its letter. Your goal is to move the conversation one step closer to a meeting and a contract, honestly and without pressure.
+Rules:
+- Answer what the person actually wrote. If they ask for a meeting, agree and offer a concrete way to set it (ask for two or three time slots that suit them, or offer to send a calendar invitation). Never invent a date, a price, a link or a fact that is not in the brief or in the conversation.
+- Write in the language of the person's last letter. Plain text, short (40-110 words), no markdown, no emoji, no exclamation marks, no flattery.
+- Start with a greeting by first name if it is known. Do not add a signature or a sign-off name: the signature is appended automatically.
+- If you cannot answer well without something only the sender knows (availability, price, a fact about the company), do not guess: reply with JSON {"need": ["question 1", "question 2"]} with at most three short questions for the sender${ctx.ui === 'uk' ? ', written in Ukrainian' : ''}.
+Otherwise reply with JSON only, no other text: {"body": "..."}`,
+    user: brief(ctx) + '\nTHE PERSON\n' + line('Name', ctx.person && ctx.person.name) + line('Job title', ctx.person && ctx.person.jobTitle) + line('Company', ctx.person && ctx.person.company) + line('Sender name', ctx.myName)
+      + '\nCONVERSATION SO FAR (oldest first)\n' + talk + (ctx.comment ? '\n\nTHE SENDER ASKS YOU TO TAKE THIS INTO ACCOUNT\n' + clean(ctx.comment, 1500) : '') + (ctx.draft ? '\n\nTHE SENDER\'S OWN DRAFT (improve it, keep its intent)\n' + clean(ctx.draft, 4000) : ''),
+  };
+}
+async function reply(fetchFn, keys, ctx) {
+  const p = replyPrompt(ctx), text = ctx.engine === 'gpt' ? await askGpt(fetchFn, keys.gpt, p) : await askClaude(fetchFn, keys.claude, p), o = parseJson(text);
+  if (Array.isArray(o.need) && o.need.length && !String(o.body || '').trim()) return { need: o.need.slice(0, 3).map((x) => clean(x, 240)), engine: ctx.engine };
+  return { body: String(o.body || '').replace(/\r/g, '').trim().slice(0, 6000), engine: ctx.engine };
+}
+
 // ---------- Campaign run ----------
 const FAR = 9e15;
 const kept = (text, r) => String(text || '').replace(/[ \t]*\[\[([\s\S]*?)\]\]/g, (m, inner) => ((inner.match(/\{\{\s*\w+\s*\}\}/g) || []).every((x) => r[x.replace(/[{}\s]/g, '')]) ? ' ' + inner.trim() : '')).replace(/^ +/gm, '');
@@ -420,4 +470,4 @@ async function sendStep(fetchFn, tokens, d, run, now) {
   return out;
 }
 
-module.exports = { READ, SEND, wroteBack, sendState, emptyVars, rawMail, sendMail, MAILER, mailToken, planRun, sendStep, threadState, tokenFor, localParts, inWindow, capFor, gapFor, watchPlan, UNIT, FAR, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };
+module.exports = { convo, reply, replyPrompt, unquote, mailText, READ, SEND, wroteBack, sendState, emptyVars, rawMail, sendMail, MAILER, mailToken, planRun, sendStep, threadState, tokenFor, localParts, inWindow, capFor, gapFor, watchPlan, UNIT, FAR, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };

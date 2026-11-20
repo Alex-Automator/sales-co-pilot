@@ -236,3 +236,19 @@ everything operators and the admin opened under it; the super admin sees everyth
 change, sending rules change) with the numbers before. At the check date AI compares the numbers and writes the
 conclusion and what to do next. The person confirms it, or disagrees and leaves a comment, and AI rewrites the
 conclusion with that comment. The goal is a system that runs as independently as possible, with the person approving.
+
+## 20. Answering from a contact card (20 Nov 2026)
+
+A contact card that came from a campaign reply (or already has a conversation) shows, on its Letters tab, the
+letters exchanged with the person and an answer field. AI (Claude or ChatGPT) drafts the answer from the
+conversation and the topic brief, or asks up to three questions when it lacks something. "Send the answer" needs
+two presses and sends at once, from the same mailbox, in the same thread, with the mailbox signature. Only the
+mailbox owner (or the super admin) can read and answer. After the answer the server watches for the person's next
+letter for 30 days and raises "Reply waiting" on the card. Server function: `convo` (read / draft / send).
+
+Replies are detected in every thread of the chain and by a mailbox search for letters from the recipient.
+Every letter carries an HTML version. A start is refused when a letter uses a field that is empty for a recipient.
+
+Agreed, not built yet: a Company card works one target company with several people — personal letters per person,
+AI studies the company's site, no A/B/C variants, a reply from one person pauses letters to the others, and the
+card itself moves along the board as the deal.
