@@ -387,9 +387,9 @@
   function vRun(c) {
     const r = ui.run && ui.run.cid === c.id ? ui.run : null; if (!r || (!r.run && !r.err)) return '';
     if (r.err && !r.run) return `<div class="revbox"><b>${t('runFailed')}</b><small>${esc(r.err)}</small></div>`;
-    const n = r.counts || {}, live = r.run.status === 'active', bx = r.box || {}, time = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const n = r.counts || {}, live = r.run.status === 'active', bx = r.box || {}, time = (ms) => { const d = new Date(ms), hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); return d.toDateString() === new Date().toDateString() ? hm : d.toLocaleDateString([], { day: '2-digit', month: '2-digit' }) + ' ' + hm; };
     const sumRow = ['queued', 'active', 'replied', 'done', 'bounced', 'error', 'stopped'].filter((k) => n[k]).map((k) => `<span class="${k === 'replied' ? 'ok' : ''}">${t('run_' + k)}: ${n[k]}</span>`).join('');
-    const why = !live ? '' : !bx.open ? t('runClosed') : bx.newToday >= bx.capToday && r.run.queue ? t('runCap').replace('{n}', bx.capToday) : bx.nextAt > r.now ? t('runNextAt') + ' ' + time(bx.nextAt) : t('runSoon');
+    const why = !live ? '' : !bx.open ? t('runClosed') : bx.newToday >= bx.capToday && r.run.queue ? t('runCap').replace('{n}', bx.capToday) : bx.nextAt > r.now ? t('runNextAt') + ' ' + time(bx.nextAt) : !r.run.queue && r.nextDue > r.now + 120000 ? t('runNextRem') + ' ' + time(r.nextDue) + '. ' + t('runWatch') : !r.run.queue && !r.nextDue ? t('runWatch') : t('runSoon');
     return `<div class="sitebox"><div class="bh">${t('runTitle')} · ${t(live ? 'run_active' : 'run_' + r.run.status)}</div>
       <p class="sitesum"><span>${t('runLetters')}: ${r.letters}</span>${sumRow}</p>${live ? `<p class="sub small">${esc(r.run.from)} · ${t('runToday')}: ${bx.newToday} / ${bx.capToday} · ${why}</p>` : ''}
       ${bx.readErr ? `<div class="revbox"><b>${t('runNoRead')}</b><small>${esc(bx.readErr)}</small></div>` : ''}

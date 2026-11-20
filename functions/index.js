@@ -210,7 +210,8 @@ exports.campaignStatus = onCall({ timeoutSeconds: 30, memory: '256MiB' }, async 
   const order = { replied: 0, error: 1, bounced: 2, active: 3, queued: 4, done: 5, stopped: 6 };
   const rows = all.sort((a, b) => (order[a.status] - order[b.status]) || ((b.sentAt || []).slice(-1)[0] || 0) - ((a.sentAt || []).slice(-1)[0] || 0)).slice(0, 300)
     .map((x) => ({ to: x.to, name: x.name, variant: x.variant, sent: x.i, of: x.steps.length, status: x.status, next: x.status === 'active' && x.i < x.steps.length ? x.due : 0, err: x.err || '' }));
-  return { now, run: r ? { status: r.status, from: r.from, queue: (r.queue || []).length, startedAt: r.startedAt } : null, counts, letters, total: all.length, rows, box };
+  const nextDue = Math.min(...all.filter((x) => x.status === 'active' && x.i < x.steps.length).map((x) => x.due).concat([lib.FAR]));
+  return { now, nextDue: nextDue < lib.FAR ? nextDue : 0, run: r ? { status: r.status, from: r.from, queue: (r.queue || []).length, startedAt: r.startedAt } : null, counts, letters, total: all.length, rows, box };
 });
 
 // campaignStop({ cardId }) -> { stopped }. Nothing more goes out; letters already sent stay as they are.
@@ -316,6 +317,27 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
     } catch (e) { await fail(doc.ref, d, e); }
   });
 
+  // 1a. Has anyone answered? Every recipient with a letter out is looked at every 10 minutes (hourly after three days),
+  // whenever their next letter is due. Records made before this check existed get it once.
+  const flag = db().collection('meta').doc('checks'), seen = await flag.get();
+  if (!seen.exists) {
+    const old = await db().collection('sends').where('status', '==', 'active').get();
+    await inChunks(old.docs.filter((x) => !x.data().chk), 20, (x) => x.ref.update({ chk: now }));
+    await flag.set({ at: now });
+  }
+  const look = await db().collection('sends').where('chk', '<=', now).orderBy('chk').limit(200).get(), justSeen = new Set(due.docs.map((x) => x.id)); note.checked = look.size;
+  await inChunks(look.docs, 8, async (doc) => {
+    const d = doc.data();
+    try {
+      if (justSeen.has(doc.id)) { await doc.ref.update({ chk: lib.nextCheck(d, now) }); return; }
+      const run = await runOf(d.cid);
+      if (d.status !== 'active' || !run || run.status !== 'active') { await doc.ref.update({ chk: lib.FAR }); return; }
+      const st = await lib.sendState(fetch, tokens, run.from, d);
+      if (st) { note.ended++; note[st] = (note[st] || 0) + 1; await doc.ref.update({ status: st, due: lib.FAR, chk: lib.FAR, endedAt: now }); if (st === 'replied') await replyCard(d, run, doc.ref); return; }
+      await doc.ref.update({ chk: lib.nextCheck(d, now), err: '' });
+    } catch (e) { console.error('reply check failed', doc.id, e.message); await doc.ref.update({ chk: now + 10 * 60000, err: (/unauthorized_client|access_denied/.test(e.message) ? 'No access to the mailbox: ' : 'Reply check failed: ') + e.message.slice(0, 220) }).catch(() => {}); }
+  });
+
   // 1b. Conversations we answered from a card: when the person writes again, the card asks for an answer.
   const talks = await db().collection('convos').where('due', '<=', now).orderBy('due').limit(60).get();
   await inChunks(talks.docs, 6, async (doc) => {
@@ -356,5 +378,5 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
       if (first && (job.d.errs || 0) + 1 < 3) { job.run.queue = job.run.queue.concat([job.doc.id]); await job.run.ref.update({ queue: job.run.queue }); await job.doc.ref.update({ due: lib.FAR }); }
     }
   }
-  if (note.due || Object.keys(note.boxes).length) console.log('tick summary ' + JSON.stringify(note));
+  if (note.due || note.checked || Object.keys(note.boxes).length) console.log('tick summary ' + JSON.stringify(note));
 });

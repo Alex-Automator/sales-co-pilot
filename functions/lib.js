@@ -460,14 +460,17 @@ function inWindow(rules, ms, tz) { const p = localParts(ms, tz); if (rules.workd
 const capFor = (rules, firstAt, now) => Math.max(1, Math.min(+rules.cap || 10, (+rules.start || 3) + (+rules.step || 0) * Math.floor(Math.max(0, now - (firstAt || now)) / (7 * 86400000))));
 const gapFor = (rules, rnd) => { const a = Math.max(1, +rules.gapMin || 10), b = Math.max(a, +rules.gapMax || a); return Math.round((rules.jitter === false ? a : a + (b - a) * rnd) * 60000); };
 
+// Replies are looked for on their own clock, not only when the next letter is due: a reminder may be days away.
+const CHECK_EVERY = 10 * 60000, CHECK_SLOW = 60 * 60000, CHECK_FAST_FOR = 3 * 86400000;
+const nextCheck = (d, now) => now + (now - ((d.sentAt || []).slice(-1)[0] || now) < CHECK_FAST_FOR ? CHECK_EVERY : CHECK_SLOW);
 // Sends the next letter of one recipient's chain. Returns the fields to save on the send record.
 async function sendStep(fetchFn, tokens, d, run, now) {
   const step = d.steps[d.i], plan = watchPlan(run.unitMs);
   const sent = await sendMail(fetchFn, { from: run.from, fromName: run.fromName || '', to: d.to, subject: step.subject, body: step.body, sig: run.sig, sigHtml: run.sigHtml, foot: run.foot, threadId: d.threadId || undefined, replyTo: d.firstMsgId || undefined }, tokens);
-  const out = { status: 'active', i: d.i + 1, threadId: sent.threadId || d.threadId || '', threads: (d.threads || []).concat(d.threadId || [], sent.threadId || []).filter((x, i, a) => x && a.indexOf(x) === i), sentAt: (d.sentAt || []).concat([now]), errs: 0, err: '' };
+  const out = { status: 'active', i: d.i + 1, threadId: sent.threadId || d.threadId || '', threads: (d.threads || []).concat(d.threadId || [], sent.threadId || []).filter((x, i, a) => x && a.indexOf(x) === i), sentAt: (d.sentAt || []).concat([now]), errs: 0, err: '', chk: now + CHECK_EVERY };
   if (d.i === 0) out.firstMsgId = await messageId(fetchFn, tokens, run.from, sent.id).catch(() => '');
   if (out.i < d.steps.length) out.due = now + d.steps[out.i].wait; else { out.due = now + plan.every; out.watchUntil = now + plan.span; }
   return out;
 }
 
-module.exports = { convo, reply, replyPrompt, unquote, mailText, READ, SEND, wroteBack, sendState, emptyVars, rawMail, sendMail, MAILER, mailToken, planRun, sendStep, threadState, tokenFor, localParts, inWindow, capFor, gapFor, watchPlan, UNIT, FAR, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };
+module.exports = { nextCheck, convo, reply, replyPrompt, unquote, mailText, READ, SEND, wroteBack, sendState, emptyVars, rawMail, sendMail, MAILER, mailToken, planRun, sendStep, threadState, tokenFor, localParts, inWindow, capFor, gapFor, watchPlan, UNIT, FAR, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };
