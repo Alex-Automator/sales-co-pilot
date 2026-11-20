@@ -402,6 +402,9 @@
   function vSend(c) {
     const seq = seqOf(c), v = S.vectors.find((x) => x.id === c.vid), co = v ? item('company', v.company) : null, mbs = myMailboxes(co), s = S.send;
     const from = mbs.length ? `<select class="in" data-seqfrom>${mbs.map((m) => `<option ${((seq.from || primaryMailbox(co)) === m.email) ? 'selected' : ''}>${esc(m.email)}</option>`).join('')}</select>` : `<span class="sub">${t('noMailbox')}</span>`;
+    // The card can open straight on this step: ask the server whether the campaign is already running before offering to start it.
+    const known = !CLOUD || !!(ui.run && ui.run.cid === c.id);
+    if (!known) setTimeout(() => { if (ui.open === c.id && !(ui.run && ui.run.cid === c.id)) runPoll(c.id); }, 0);
     const all = S.leads.filter((l) => l.cid === c.id), go = all.filter(sendable).length, crit = critOf(c), unchecked = crit ? all.filter((l) => !l.off && !chkOf(l, crit)).length : 0;
     const lets = [].concat(...varsOf(seq).map((k) => (k === 'A' ? seq.steps : seq.alt[k].steps))), okL = lets.filter((x) => x.status === 'approved').length;
     const live = ui.run && ui.run.cid === c.id && ui.run.run && ui.run.run.status === 'active', ready = CLOUD && go > 0 && okL === lets.length && mbs.length > 0, busy = ui.run && ui.run.cid === c.id && ui.run.busy;
@@ -417,7 +420,7 @@
         ${prim ? `<p class="sub small errc">${t('runPrimary').replace('{m}', esc(fromNow))}</p>` : ''}</div>
       ${vRun(c)}
       <div class="acts">${CLOUD ? '' : `<span class="sub small">${t('aiDemoOnly')}</span>`}<span class="grow"></span>
-        <button class="btn ${ui.runArm ? 'danger' : ''}" data-act="runStart" ${ready && !busy ? '' : 'disabled'}>${busy ? t('aiBusy') : ui.runArm ? t('startSure').replace('{n}', go).replace('{m}', esc(fromNow)) : t(live ? 'startMore' : 'startCampaign')}</button></div>
+        <button class="btn ${ui.runArm ? 'danger' : ''}" data-act="runStart" ${ready && !busy && known ? '' : 'disabled'}>${!known ? t('runChecking') : busy ? t('aiBusy') : ui.runArm ? t('startSure').replace('{n}', go).replace('{m}', esc(fromNow)) : t(live ? 'startMore' : 'startCampaign')}</button></div>
       <p class="sub small">${t('startNote')}</p>`;
   }
   // Reads rows copied from a spreadsheet (tabs) or a CSV file (commas or semicolons, quotes allowed).
