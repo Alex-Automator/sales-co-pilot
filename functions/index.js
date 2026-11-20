@@ -301,13 +301,15 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
 
   // 1. Threads whose time has come: a reply or a bounce ends the chain; otherwise the next letter waits for its mailbox.
   const due = await db().collection('sends').where('due', '<=', now).orderBy('due').limit(240).get(), follow = {};
+  // One line per run in the server log: what was due and what each mailbox did. It is the only way to see why a letter waits.
+  const note = { due: due.size, ended: 0, parked: 0, boxes: {} };
   await inChunks(due.docs, 8, async (doc) => {
     const d = doc.data();
     try {
       const run = await runOf(d.cid);
-      if (d.status !== 'active' || !run || run.status !== 'active') { await doc.ref.update({ due: lib.FAR }); return; }
+      if (d.status !== 'active' || !run || run.status !== 'active') { note.parked++; await doc.ref.update({ due: lib.FAR }); return; }
       const st = await lib.sendState(fetch, tokens, run.from, d);
-      if (st) { await doc.ref.update({ status: st, due: lib.FAR, endedAt: now }); if (st === 'replied') await replyCard(d, run, doc.ref); return; }
+      if (st) { note.ended++; note[st] = (note[st] || 0) + 1; await doc.ref.update({ status: st, due: lib.FAR, endedAt: now }); if (st === 'replied') await replyCard(d, run, doc.ref); return; }
       if (d.i < d.steps.length) { (follow[run.from] = follow[run.from] || []).push({ doc, d, run }); return; }
       const plan = lib.watchPlan(run.unitMs);
       await doc.ref.update(now > (d.watchUntil || 0) ? { status: 'done', due: lib.FAR, endedAt: now } : { due: now + plan.every });
@@ -333,9 +335,9 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
   Object.keys(follow).forEach((b) => { byBox[b] = byBox[b] || []; });
   for (const boxMail of Object.keys(byBox)) {
     const msRef = db().collection('mailstate').doc(boxMail), msSnap = await msRef.get(), ms = msSnap.exists ? msSnap.data() : {};
-    if (now < (ms.nextAt || 0)) continue;
+    if (now < (ms.nextAt || 0)) { note.boxes[boxMail] = 'pause until ' + new Date(ms.nextAt).toISOString(); continue; }
     const boxRuns = byBox[boxMail].sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0)), tz = (boxRuns[0] || (follow[boxMail] || [])[0].run).tz;
-    if (!lib.inWindow(rules, now, tz)) continue;
+    if (!lib.inWindow(rules, now, tz)) { note.boxes[boxMail] = `outside hours ${rules.from}-${rules.to} in ${tz}`; continue; }
     const today = lib.localParts(now, tz).day, newToday = ms.day === today ? ms.newToday || 0 : 0;
     let job = (follow[boxMail] || []).sort((a, b) => a.d.due - b.d.due)[0], first = false;
     if (!job && newToday < lib.capFor(rules, ms.firstAt, now)) {
@@ -343,13 +345,16 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
       if (run) { const id = run.queue[0], doc = await db().collection('sends').doc(id).get(); run.queue = run.queue.slice(1); await run.ref.update({ queue: run.queue, updatedAt: now });
         if (doc.exists && doc.data().status === 'queued') { job = { doc, d: doc.data(), run }; first = true; } }
     }
-    if (!job) continue;
+    if (!job) { note.boxes[boxMail] = `nothing to send (reminders waiting ${(follow[boxMail] || []).length}, new today ${newToday})`; continue; }
     try {
       await job.doc.ref.update(await lib.sendStep(fetch, tokens, job.d, job.run, Date.now()));
+      note.boxes[boxMail] = `sent letter ${job.d.i + 1} to ${job.d.to}`;
       await msRef.set({ firstAt: ms.firstAt || now, lastAt: now, nextAt: now + lib.gapFor(rules, Math.random()), day: today, newToday: newToday + (first ? 1 : 0) }, { merge: true });
     } catch (e) {
+      note.boxes[boxMail] = 'failed: ' + e.message.slice(0, 200);
       await fail(job.doc.ref, job.d, e);
       if (first && (job.d.errs || 0) + 1 < 3) { job.run.queue = job.run.queue.concat([job.doc.id]); await job.run.ref.update({ queue: job.run.queue }); await job.doc.ref.update({ due: lib.FAR }); }
     }
   }
+  if (note.due || Object.keys(note.boxes).length) console.log('tick summary ' + JSON.stringify(note));
 });
