@@ -922,7 +922,9 @@
     cvDraft(d) {
       const c = cur(); if (!c || ui.cvBusy) return; ui.cvBusy = d.e === 'gpt' ? 'gpt' : 'claude'; ui.cvNeed = null; ui.cvArm = false; render();
       Cloud.fn('convo', { cardId: c.id, op: 'draft', engine: ui.cvBusy, comment: ui.cvNote || '', draft: c.reply || '', ui: S.lang }, 130000).then((r) => {
-        ui.cvBusy = ''; if (r.need) ui.cvNeed = { cid: c.id, list: r.need }; else { c.reply = r.body; save(); } render();
+        // The card may have been refreshed from the server meanwhile: write into the current copy, not the one from the click.
+        const k = S.cards.find((x) => x.id === c.id) || c;
+        ui.cvBusy = ''; if (r.need) ui.cvNeed = { cid: k.id, list: r.need }; else { k.reply = r.body; save(); } render();
       }, (e) => { ui.cvBusy = ''; ui.err = convoWhy(e); ui.errAi = true; render(); });
     },
     // The first press arms the button, the second one sends: a letter cannot be taken back.
@@ -931,9 +933,10 @@
       if (!ui.cvArm) { ui.cvArm = true; render(); return; }
       ui.cvArm = false; ui.cvBusy = 'send'; render();
       Cloud.fn('convo', { cardId: c.id, op: 'send', body: c.reply }, 70000).then((r) => {
-        if (r && r.mail) c.mail = r.mail;
-        ui.cvBusy = ''; ui.cvSent = c.id; c.reply = ''; c.awaiting = false; if (c.next && c.next.text === 'Answer the reply') c.next = { text: '', date: '' };
-        commit(); convoLoad(c.id, true);
+        const k = S.cards.find((x) => x.id === c.id) || c;
+        if (r && r.mail) k.mail = r.mail;
+        ui.cvBusy = ''; ui.cvSent = k.id; k.reply = ''; k.awaiting = false; if (k.next && k.next.text === 'Answer the reply') k.next = { text: '', date: '' };
+        commit(); convoLoad(k.id, true);
       }, (e) => { ui.cvBusy = ''; ui.err = convoWhy(e); ui.errAi = true; render(); });
     },
     seed() { S.zones = demoState().zones; let n = 0; ZONES.forEach((z) => S.zones[z].forEach((it) => { it.ord = ++n; it.by = au.uid; if (z === 'company') { it.s.mailboxes = []; it.access = {}; it.access[au.uid] = 'shared'; } })); commit(); },

@@ -275,7 +275,7 @@ exports.convo = onCall({ secrets: [ANTHROPIC_API_KEY, OPENAI_API_KEY], timeoutSe
   try { sent = await lib.sendMail(fetch, { from: m.box, fromName: box.name || user.name || '', to, subject, body, sig: box.sig || '', sigHtml: box.sigHtml || '', threadId: last ? last.thread : undefined, replyTo: last ? last.msgId || undefined : undefined }, tokens); }
   catch (e) { console.error('convo send failed', e.message); throw new HttpsError('failed-precondition', (/unauthorized_client|access_denied/.test(e.message) ? 'MAIL_ACCESS ' : '') + e.message.slice(0, 300)); }
   const threads = (m.threads || []).concat(last ? last.thread : [], sent.threadId || []).filter((x, i, a) => x && a.indexOf(x) === i);
-  await db().collection('cards').doc(d.cardId).update({ mail: { box: m.box, threads, since: m.since || now }, awaiting: false }).catch(() => {});
+  await db().collection('cards').doc(d.cardId).update(Object.assign({ mail: { box: m.box, threads, since: m.since || now }, awaiting: false, reply: '' }, (card.next || {}).text === 'Answer the reply' ? { next: { text: '', date: '' } } : {})).catch(() => {});
   // From now on the server watches for their next letter and raises the flag on the card.
   await db().collection('convos').doc(d.cardId).set({ cid: d.cardId, box: m.box, to, since: now, due: now + 10 * 60000, until: now + 30 * 86400000 });
   return { ok: true, at: now, mail: { box: m.box, threads, since: m.since || now } };
