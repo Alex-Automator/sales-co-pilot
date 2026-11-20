@@ -150,7 +150,7 @@ async function cardGuard(req) {
 const forbiddenFor = async (uid) => { const g = await db().collection('guards').doc(String(uid || '-')).get(); return ((g.exists && g.data().list) || []).map((x) => String(x).trim().toLowerCase().replace(/^@/, '')).filter(Boolean); };
 const isForbidden = (list, email) => { const e = String(email || '').trim().toLowerCase(); return list.some((g) => e === g || e.endsWith('@' + g)); };
 const sendsOf = (cardId) => db().collection('sends').where('cid', '==', cardId).get();
-const rulesNow = async () => { const s = await db().collection('workspace').doc('shared').get(); return Object.assign({ start: 3, step: 2, cap: 10, gapMin: 10, gapMax: 20, from: 9, to: 17, workdays: true, jitter: true, coldSecondary: true }, (s.exists && s.data().send) || {}); };
+const rulesNow = async () => { const s = await db().collection('workspace').doc('shared').get(); return Object.assign({ start: 3, step: 2, cap: 10, gapMin: 10, gapMax: 20, from: 9, to: 17, workdays: true, jitter: true, coldSecondary: true, perDomain: 2, bounce: 3 }, (s.exists && s.data().send) || {}); };
 const inChunks = async (items, n, fn) => { for (let i = 0; i < items.length; i += n) await Promise.all(items.slice(i, i + n).map(fn)); };
 
 // campaignStart({ cardId, tz }) -> { queued, already, from }.
@@ -185,7 +185,13 @@ exports.campaignStart = onCall({ timeoutSeconds: 120, memory: '512MiB' }, async 
   // Letters that stopped on an error (no access to the mailbox, for example) get another try.
   const broken = old.docs.filter((x) => x.data().status === 'error');
   if (broken.length) { const b = db().batch(); broken.forEach((x) => b.update(x.ref, { status: 'active', errs: 0, err: '', due: Date.now() })); await b.commit(); await db().collection('runs').doc(d.cardId).set({ status: 'active', updatedAt: Date.now() }, { merge: true }); }
-  if (!fresh.length && broken.length) return { queued: 0, already: plan.length, revived: broken.length, from: box.email, forbidden, dupes };
+  // A campaign paused because of bounced letters goes on when the person presses the button again: they have seen the warning.
+  const before = await db().collection('runs').doc(d.cardId).get(), wasPaused = before.exists && before.data().paused;
+  if (wasPaused) {
+    await before.ref.update({ paused: null, bounceAck: old.docs.filter((x) => x.data().status === 'bounced').length, updatedAt: Date.now() });
+    await db().collection('cards').doc(d.cardId).update({ alert: null }).catch(() => {});
+  }
+  if (!fresh.length && (broken.length || wasPaused)) return { queued: 0, already: plan.length, revived: broken.length, resumed: !!wasPaused, from: box.email, forbidden, dupes };
   if (!fresh.length) throw new HttpsError('failed-precondition', plan.length ? 'Everyone on the list has already been written to.' : total ? `NOBODY_LEFT ${forbidden}|${dupes}` : 'There is no recipient with an address.');
   // Before anything is queued: can the server really send from this mailbox?
   try { await lib.mailToken(fetch, box.email, 'https://www.googleapis.com/auth/gmail.send'); }
@@ -202,7 +208,8 @@ exports.campaignStart = onCall({ timeoutSeconds: 120, memory: '512MiB' }, async 
   }
   const runRef = db().collection('runs').doc(d.cardId), prev = await runRef.get();
   const queue = (prev.exists && prev.data().status === 'active' ? (prev.data().queue || []).filter((x) => !ids.includes(x)) : []).concat(ids);
-  await runRef.set({ cid: d.cardId, vid: card.vid, owner: uid, acl: card.acl || [], cardTitle: card.title || '', cardVec: card.vec || {}, from: box.email, fromName: box.name || user.name || '', sig: box.sig || '', sigHtml: box.sigHtml || '',
+  const meta = {}, pm = (prev.exists && prev.data().meta) || {}; queue.forEach((id) => { if (pm[id]) meta[id] = pm[id]; }); fresh.forEach((p) => { meta[`${d.cardId}_${p.lead}`] = `${p.tz || ''}|${p.dom || ''}`; });
+  await runRef.set({ meta, bounceAck: (prev.exists && prev.data().bounceAck) || 0, cid: d.cardId, vid: card.vid, owner: uid, acl: card.acl || [], cardTitle: card.title || '', cardVec: card.vec || {}, from: box.email, fromName: box.name || user.name || '', sig: box.sig || '', sigHtml: box.sigHtml || '',
     foot: optOn ? (v.opt && v.opt.text) || '' : '', tz: String(d.tz || 'UTC').slice(0, 60), unitMs, status: 'active', startedAt: prev.exists ? prev.data().startedAt || now : now, updatedAt: now, queue });
   return { queued: fresh.length, already: plan.length - fresh.length, from: box.email, forbidden, dupes };
 });
@@ -217,12 +224,17 @@ exports.campaignStatus = onCall({ timeoutSeconds: 30, memory: '256MiB' }, async 
   if (r) { const ms = await db().collection('mailstate').doc(r.from).get(), m = ms.exists ? ms.data() : {}, day = lib.localParts(now, r.tz).day;
     // Can the server read this mailbox? If not, replies cannot be seen: say so instead of silently waiting.
     let readErr = ''; try { await lib.mailToken(fetch, r.from, lib.READ); } catch (e) { readErr = e.message.slice(0, 240); }
-    box = { readErr, from: r.from, nextAt: m.nextAt || 0, newToday: m.day === day ? m.newToday || 0 : 0, capToday: lib.capFor(rules, m.firstAt, now), open: lib.inWindow(rules, now, r.tz) }; }
+    box = { readErr, from: r.from, nextAt: m.nextAt || 0, newToday: m.day === day ? m.newToday || 0 : 0, capToday: lib.capFor(rules, m.firstAt, now), open: lib.inWindow(rules, now, r.tz) };
+    // Why people in the queue are not being written to right now: their working day is off, or their company had its share today.
+    const doms = m.day === day ? JSON.parse(m.doms || '{}') : {}, perDom = +rules.perDomain || 0, meta = r.meta || {}; let hours = 0, company = 0;
+    (r.queue || []).forEach((id) => { const [z, dom] = String(meta[id] || '|').split('|'); if (!lib.inWindow(rules, now, z || r.tz)) hours++; else if (perDom && dom && (doms[dom] || 0) >= perDom) company++; });
+    all.forEach((x) => { if (x.status === 'active' && x.i < x.steps.length && x.due <= now && !lib.inWindow(rules, now, x.tz || r.tz)) hours++; });
+    box.wait = { hours, company, perDomain: perDom, from: rules.from, to: rules.to }; }
   const order = { replied: 0, error: 1, bounced: 2, active: 3, queued: 4, done: 5, stopped: 6 };
   const rows = all.sort((a, b) => (order[a.status] - order[b.status]) || ((b.sentAt || []).slice(-1)[0] || 0) - ((a.sentAt || []).slice(-1)[0] || 0)).slice(0, 300)
-    .map((x) => ({ to: x.to, name: x.name, variant: x.variant, sent: x.i, of: x.steps.length, status: x.status, next: x.status === 'active' && x.i < x.steps.length ? x.due : 0, err: x.err || '' }));
+    .map((x) => ({ to: x.to, name: x.name, variant: x.variant, sent: x.i, of: x.steps.length, status: x.status, tz: x.tz || '', kind: x.kind || '', next: x.status === 'active' && x.i < x.steps.length ? x.due : 0, err: x.err || '' }));
   const nextDue = Math.min(...all.filter((x) => x.status === 'active' && x.i < x.steps.length).map((x) => x.due).concat([lib.FAR]));
-  return { now, nextDue: nextDue < lib.FAR ? nextDue : 0, run: r ? { status: r.status, from: r.from, queue: (r.queue || []).length, startedAt: r.startedAt } : null, counts, letters, total: all.length, rows, box };
+  return { now, nextDue: nextDue < lib.FAR ? nextDue : 0, run: r ? { status: r.status, from: r.from, tz: r.tz, paused: r.paused || null, queue: (r.queue || []).length, startedAt: r.startedAt } : null, counts, letters, total: all.length, rows, box };
 });
 
 // campaignStop({ cardId }) -> { stopped }. Nothing more goes out; letters already sent stay as they are.
@@ -294,11 +306,12 @@ exports.convo = onCall({ secrets: [ANTHROPIC_API_KEY, OPENAI_API_KEY], timeoutSe
 });
 
 // A reply turns the recipient into a contact card on the board, in the Replied column, linked to its campaign.
-async function replyCard(d, run, ref) {
+async function replyCard(d, run, ref, kind) {
   const id = 'k' + ref.id.replace(/[^a-zA-Z0-9]/g, '').slice(-14) + Date.now().toString(36);
   await db().collection('cards').doc(id).set({ id, vid: run.vid, owner: run.owner, acl: run.acl || [], ord: Date.now(), type: 'contact', stage: 'replied', title: d.name || d.company || d.to, vec: run.cardVec || {}, parent: d.cid,
     f: { jobTitle: d.jobTitle || '', company: d.company || '', email: d.to, phone: '', linkedin: '' }, next: { text: 'Answer the reply', date: new Date().toISOString().slice(0, 10) }, awaiting: true,
-    auto: { follow: false, reply: false, notify: true, draft: true }, notes: `Replied to the campaign "${run.cardTitle}" (variant ${d.variant}, after letter ${d.i}).`, photo: '', blocked: '', okEmail: d.to, tags: d.tags || [],
+    auto: { follow: false, reply: false, notify: true, draft: true }, notes: `${kind === 'auto' ? 'Automatic answer (out of office or similar) to' : 'Replied to'} the campaign "${run.cardTitle}" (variant ${d.variant}, after letter ${d.i}).`, photo: '', blocked: '', okEmail: d.to,
+    tags: (d.tags || []).concat(kind === 'auto' ? ['auto-reply'] : []), replyKind: kind || 'human',
     mail: { box: run.from, threads: (d.threads || []).concat(d.threadId || []).filter((x, i, a) => x && a.indexOf(x) === i), since: (d.sentAt || [])[0] || Date.now() } });
   await db().collection('leads').doc(d.lead).update({ card: id, replied: true }).catch(() => {});
 }
@@ -329,6 +342,16 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
     await run.ref.update({ status: 'stopped', queue: [], updatedAt: at }); run.status = 'stopped'; run.queue = [];
   };
 
+  // A chain ends with a reply or a bounce. An automatic answer (out of office) still asks for attention and gets a card,
+  // but it is marked, so that statistics count only answers written by people.
+  const hit = {};
+  const ended = async (doc, d, run, st) => {
+    note.ended++; note[st] = (note[st] || 0) + 1;
+    const kind = st === 'replied' ? await lib.replyKind(fetch, tokens, run.from, d).catch(() => 'human') : '';
+    await doc.ref.update({ status: st, kind, due: lib.FAR, chk: lib.FAR, endedAt: now });
+    if (st === 'replied') await replyCard(d, run, doc.ref, kind); else hit[run.cid] = run;
+  };
+
   // 1. Threads whose time has come: a reply or a bounce ends the chain; otherwise the next letter waits for its mailbox.
   const due = await db().collection('sends').where('due', '<=', now).orderBy('due').limit(240).get(), follow = {};
   // One line per run in the server log: what was due and what each mailbox did. It is the only way to see why a letter waits.
@@ -339,7 +362,7 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
       const run = await runOf(d.cid);
       if (d.status !== 'active' || !run || run.status !== 'active') { note.parked++; await doc.ref.update({ due: lib.FAR }); return; }
       const st = await lib.sendState(fetch, tokens, run.from, d);
-      if (st) { note.ended++; note[st] = (note[st] || 0) + 1; await doc.ref.update({ status: st, due: lib.FAR, endedAt: now }); if (st === 'replied') await replyCard(d, run, doc.ref); return; }
+      if (st) { await ended(doc, d, run, st); return; }
       if (d.i < d.steps.length) { (follow[run.from] = follow[run.from] || []).push({ doc, d, run }); return; }
       const plan = lib.watchPlan(run.unitMs);
       await doc.ref.update(now > (d.watchUntil || 0) ? { status: 'done', due: lib.FAR, endedAt: now } : { due: now + plan.every });
@@ -364,7 +387,7 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
       const last = (d.sentAt || []).slice(-1)[0] || 0, halted = d.status === 'stopped' && last && now - last < 21 * 86400000;
       if (!run || !last || !(halted || (d.status === 'active' && run.status === 'active'))) { await doc.ref.update({ chk: lib.FAR }); return; }
       const st = await lib.sendState(fetch, tokens, run.from, d);
-      if (st) { note.ended++; note[st] = (note[st] || 0) + 1; await doc.ref.update({ status: st, due: lib.FAR, chk: lib.FAR, endedAt: now }); if (st === 'replied') await replyCard(d, run, doc.ref); return; }
+      if (st) { await ended(doc, d, run, st); return; }
       await doc.ref.update({ chk: lib.nextCheck(d, now), err: '' });
     } catch (e) { console.error('reply check failed', doc.id, e.message); await doc.ref.update({ chk: now + 10 * 60000, err: (/unauthorized_client|access_denied/.test(e.message) ? 'No access to the mailbox: ' : 'Reply check failed: ') + e.message.slice(0, 220) }).catch(() => {}); }
   });
@@ -410,13 +433,22 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
     const msRef = db().collection('mailstate').doc(boxMail), msSnap = await msRef.get(), ms = msSnap.exists ? msSnap.data() : {};
     if (now < (ms.nextAt || 0)) { note.boxes[boxMail] = 'pause until ' + new Date(ms.nextAt).toISOString(); continue; }
     const boxRuns = byBox[boxMail].sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0)), tz = (boxRuns[0] || (follow[boxMail] || [])[0].run).tz;
-    if (!lib.inWindow(rules, now, tz)) { note.boxes[boxMail] = `outside hours ${rules.from}-${rules.to} in ${tz}`; continue; }
+    // Working hours are the recipient's (an estimate from country, state, email or website); the sender's when nothing is known.
+    const open = (z, run) => lib.inWindow(rules, now, z || run.tz);
     const today = lib.localParts(now, tz).day, newToday = ms.day === today ? ms.newToday || 0 : 0;
-    let job = (follow[boxMail] || []).filter((x) => !x.d.lock).sort((a, b) => a.d.due - b.d.due)[0], first = false;
+    const doms = ms.day === today ? JSON.parse(ms.doms || '{}') : {}, perDom = +rules.perDomain || 0;
+    const waiting = (follow[boxMail] || []).filter((x) => !x.d.lock && !x.run.paused);
+    let job = waiting.filter((x) => open(x.d.tz, x.run)).sort((a, b) => a.d.due - b.d.due)[0], first = false, asleep = waiting.length - (job ? 1 : 0), capped = 0;
     if (!job && newToday < lib.capFor(rules, ms.firstAt, now)) {
-      const run = boxRuns.find((r) => (r.queue || []).length);
-      if (run) { const id = run.queue[0], doc = await db().collection('sends').doc(id).get(); run.queue = run.queue.slice(1); await run.ref.update({ queue: run.queue, updatedAt: now });
-        if (doc.exists && doc.data().status === 'queued' && !doc.data().lock) { job = { doc, d: doc.data(), run }; first = true; } }
+      // The next person in the queue whose working day is on and whose company has not had its share of new letters today.
+      for (const run of boxRuns) {
+        if (run.paused || job) continue;
+        const meta = run.meta || {}, q = run.queue || [];
+        const at = q.findIndex((id) => { const [z, dom] = String(meta[id] || '|').split('|'); if (!open(z, run)) { asleep++; return false; } if (perDom && dom && (doms[dom] || 0) >= perDom) { capped++; return false; } return true; });
+        if (at < 0) continue;
+        const id = q[at], doc = await db().collection('sends').doc(id).get(); run.queue = q.filter((x) => x !== id); await run.ref.update({ queue: run.queue, updatedAt: now });
+        if (doc.exists && doc.data().status === 'queued' && !doc.data().lock) { job = { doc, d: doc.data(), run }; first = true; }
+      }
     }
     // Last look before a letter leaves: is the campaign card still there, is the person still on the list and allowed?
     if (job) {
@@ -424,19 +456,30 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
       if (why === 'no card') { await endRun(job.run, now); note.boxes[boxMail] = 'campaign card deleted: run stopped'; continue; }
       if (why) { await job.doc.ref.update({ status: 'stopped', due: lib.FAR, chk: (job.d.sentAt || []).length ? now : lib.FAR, endedAt: now, err: why }); note.boxes[boxMail] = `skipped ${job.d.to}: ${why}`; continue; }
     }
-    if (!job) { note.boxes[boxMail] = `nothing to send (reminders waiting ${(follow[boxMail] || []).length}, new today ${newToday})`; continue; }
+    if (!job) { note.boxes[boxMail] = `nothing to send now (outside their working hours: ${asleep}, company limit for today: ${capped}, new today ${newToday})`; continue; }
     try {
       await job.doc.ref.update({ lock: now });
       const out = Object.assign(await lib.sendStep(fetch, tokens, job.d, job.run, Date.now()), { lock: 0 });
       // The letter is out. Saving that fact must not fail quietly, or the same letter would go again.
       for (let n = 0; ; n++) { try { await job.doc.ref.update(out); break; } catch (e) { if (n >= 3) { console.error('sent but not recorded', job.doc.id, e.message); break; } await new Promise((r) => setTimeout(r, 400 * (n + 1))); } }
       note.boxes[boxMail] = `sent letter ${job.d.i + 1} to ${job.d.to}`;
-      await msRef.set({ firstAt: ms.firstAt || now, lastAt: now, nextAt: now + lib.gapFor(rules, Math.random()), day: today, newToday: newToday + (first ? 1 : 0) }, { merge: true });
+      if (first && job.d.dom) doms[job.d.dom] = (doms[job.d.dom] || 0) + 1;
+      await msRef.set({ firstAt: ms.firstAt || now, lastAt: now, nextAt: now + lib.gapFor(rules, Math.random()), day: today, newToday: newToday + (first ? 1 : 0), doms: JSON.stringify(doms) }, { merge: true });
     } catch (e) {
       note.boxes[boxMail] = 'failed: ' + e.message.slice(0, 200);
       await fail(job.doc.ref, job.d, e); await job.doc.ref.update({ lock: 0 }).catch(() => {});
       if (first && (job.d.errs || 0) + 1 < 3) { job.run.queue = job.run.queue.concat([job.doc.id]); await job.run.ref.update({ queue: job.run.queue }); await job.doc.ref.update({ due: lib.FAR }); }
     }
+  }
+  // 3. Too many letters came back? Bad addresses hurt the mailbox's reputation, so the campaign waits for a person to look.
+  for (const run of Object.values(hit)) {
+    try {
+      const all = (await sendsOf(run.cid)).docs.map((x) => x.data()), sent = all.filter((x) => (x.sentAt || []).length).length, bounced = all.filter((x) => x.status === 'bounced').length;
+      if (run.paused || run.status !== 'active' || bounced < 2 || bounced <= (run.bounceAck || 0) || bounced * 100 <= (+rules.bounce || 0) * sent || !+rules.bounce) continue;
+      const paused = { why: 'bounce', bounced, sent, limit: +rules.bounce, at: now };
+      await run.ref.update({ paused, updatedAt: now }); run.paused = paused; note.paused = (note.paused || 0) + 1;
+      await db().collection('cards').doc(run.cid).update({ alert: paused }).catch(() => {});
+    } catch (e) { console.error('bounce check failed', run.cid, e.message); }
   }
   if (note.due || note.checked || Object.keys(note.boxes).length) console.log('tick summary ' + JSON.stringify(note));
 });

@@ -179,6 +179,7 @@
   function cardHtml(c) {
     const badges = [], why = blockedWhy(c);
     if (why) badges.push(`<span class="blk">${t('blockedBadge')}</span>`);
+    if (c.type === 'campaign' && c.alert) badges.push(`<span class="blk" title="${t('runPaused')}">${t('alertBadge')}</span>`);
     if (c.awaiting && !closed(c)) badges.push(`<span class="rep">${t('replyWaiting')}</span>`);
     if (c.next && c.next.date && !closed(c)) {
       const cls = c.next.date < today() ? 'overdue' : '';
@@ -390,13 +391,16 @@
     if (r.err && !r.run) return `<div class="revbox"><b>${t('runFailed')}</b><small>${esc(r.err)}</small></div>`;
     const n = r.counts || {}, live = r.run.status === 'active', bx = r.box || {}, time = (ms) => { const d = new Date(ms), hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); return d.toDateString() === new Date().toDateString() ? hm : d.toLocaleDateString([], { day: '2-digit', month: '2-digit' }) + ' ' + hm; };
     const sumRow = ['queued', 'active', 'replied', 'done', 'bounced', 'error', 'stopped'].filter((k) => n[k]).map((k) => `<span class="${k === 'replied' ? 'ok' : ''}">${t('run_' + k)}: ${n[k]}</span>`).join('');
-    const why = !live ? '' : !bx.open ? t('runClosed') : bx.newToday >= bx.capToday && r.run.queue ? t('runCap').replace('{n}', bx.capToday) : bx.nextAt > r.now ? t('runNextAt') + ' ' + time(bx.nextAt) : !r.run.queue && r.nextDue > r.now + 120000 ? t('runNextRem') + ' ' + time(r.nextDue) + '. ' + t('runWatch') : !r.run.queue && !r.nextDue ? t('runWatch') : t('runSoon');
+    const pz = r.run.paused, wt = bx.wait || {};
+    const why = !live ? '' : pz ? t('runPausedShort') : bx.newToday >= bx.capToday && r.run.queue ? t('runCap').replace('{n}', bx.capToday) : bx.nextAt > r.now ? t('runNextAt') + ' ' + time(bx.nextAt) : !r.run.queue && r.nextDue > r.now + 120000 ? t('runNextRem') + ' ' + time(r.nextDue) + '. ' + t('runWatch') : !r.run.queue && !r.nextDue ? t('runWatch') : t('runSoon');
     return `<div class="sitebox"><div class="bh">${t('runTitle')} · ${t(live ? 'run_active' : 'run_' + r.run.status)}</div>
       <p class="sitesum"><span>${t('runLetters')}: ${r.letters}</span>${sumRow}</p>${live ? `<p class="sub small">${esc(r.run.from)} · ${t('runToday')}: ${bx.newToday} / ${bx.capToday} · ${why}</p>` : ''}
+      ${pz ? `<div class="revbox"><b>${t('runPaused')}</b><small>${t('runPausedWhy').replace('{b}', pz.bounced).replace('{s}', pz.sent).replace('{l}', pz.limit)}</small></div>` : ''}
+      ${live && !pz && wt.hours ? `<p class="sub small">${t('runWaitHours').replace('{n}', wt.hours).replace('{a}', wt.from).replace('{b}', wt.to)}</p>` : ''}${live && !pz && wt.company ? `<p class="sub small warnc">${t('runWaitCo').replace('{n}', wt.company).replace('{k}', wt.perDomain)}</p>` : ''}
       ${bx.readErr ? `<div class="revbox"><b>${t('runNoRead')}</b><small>${esc(bx.readErr)}</small></div>` : ''}
       <div class="acts tight">${live ? `<button class="btn ghost sm danger" data-act="runStop">${t('runStopBtn')}</button>` : ''}<button class="link small" data-act="runRefresh">${t('runRefresh')}</button></div>
-      <table class="ltable"><tr><th>${t('email')}</th><th>${t('variant')}</th><th>${t('runSent')}</th><th>${t('runState')}</th><th>${t('runNext')}</th></tr>
-      ${(r.rows || []).map((x) => `<tr><td>${esc(x.to)}</td><td>${esc(x.variant)}</td><td>${x.sent} / ${x.of}</td><td><span class="chk ${x.status === 'replied' ? 'yes' : x.status === 'error' || x.status === 'bounced' ? 'unsure' : ''}">${t('run_' + x.status)}</span>${x.err ? `<small class="ev" title="${esc(x.err)}">${esc(x.err)}</small>` : ''}</td><td>${x.next ? time(x.next) : ''}</td></tr>`).join('')}</table>
+      <table class="ltable"><tr><th>${t('email')}</th><th>${t('variant')}</th><th>${t('runSent')}</th><th>${t('runState')}</th><th>${t('runNext')}</th><th>${t('runZone')}</th></tr>
+      ${(r.rows || []).map((x) => `<tr><td>${esc(x.to)}</td><td>${esc(x.variant)}</td><td>${x.sent} / ${x.of}</td><td><span class="chk ${x.status === 'replied' ? 'yes' : x.status === 'error' || x.status === 'bounced' ? 'unsure' : ''}">${t('run_' + x.status)}</span>${x.kind === 'auto' ? ` <span class="ty">${t('runAuto')}</span>` : ''}${x.err ? `<small class="ev" title="${esc(x.err)}">${esc(x.err)}</small>` : ''}</td><td>${x.next ? time(x.next) : ''}</td><td class="sub small">${esc((x.tz || r.run.tz || '').split('/').pop().replace(/_/g, ' '))}${x.tz ? '' : ' *'}</td></tr>`).join('')}</table>
       ${ui.runSkip && ui.runSkip.cid === c.id ? `<p class="sub small">${t('runSkipped').replace('{f}', ui.runSkip.forbidden).replace('{d}', ui.runSkip.dupes)}</p>` : ''}${live ? `<p class="sub small">${t('runLive')}</p>` : ''}</div>`;
   }
   // Step 4: from which mailbox, by which rules, and what is still missing before the start.
@@ -421,7 +425,7 @@
         ${prim ? `<p class="sub small errc">${t('runPrimary').replace('{m}', esc(fromNow))}</p>` : ''}</div>
       ${vRun(c)}
       <div class="acts">${CLOUD ? '' : `<span class="sub small">${t('aiDemoOnly')}</span>`}<span class="grow"></span>
-        <button class="btn ${ui.runArm ? 'danger' : ''}" data-act="runStart" ${ready && !busy && known ? '' : 'disabled'}>${!known ? t('runChecking') : busy ? t('aiBusy') : ui.runArm ? t('startSure').replace('{n}', go).replace('{m}', esc(fromNow)) : t(live ? 'startMore' : 'startCampaign')}</button></div>
+        <button class="btn ${ui.runArm ? 'danger' : ''}" data-act="runStart" ${ready && !busy && known ? '' : 'disabled'}>${!known ? t('runChecking') : busy ? t('aiBusy') : ui.runArm ? t('startSure').replace('{n}', go).replace('{m}', esc(fromNow)) : t(ui.run && ui.run.cid === c.id && ui.run.run && ui.run.run.paused ? 'startResume' : live ? 'startMore' : 'startCampaign')}</button></div>
       <p class="sub small">${t('startNote')}</p>`;
   }
   // Reads rows copied from a spreadsheet (tabs) or a CSV file (commas or semicolons, quotes allowed).
@@ -585,9 +589,10 @@
     const tp = topicOf(c), bs = (tp && tp.s) || {}, thin = !String(bs.offer || '').trim() && !String(bs.hook || '').trim() && !String(c.notes || '').trim();
     const briefHint = thin ? `<div class="revbox"><b>${t('thinTitle')}</b><small>${t('thinNote')}</small>${tp ? `<div class="acts tight"><button class="btn sm" data-act="editParam" data-zone="topic" data-id="${tp.id}">${t('thinOpen')}</button></div>` : ''}</div>` : '';
     const camp = c.type === 'campaign', will = camp ? S.leads.filter((l) => l.cid === c.id && sendable(l)).length : 0;
+    const started = camp && (c.runAt || c.stage !== 'new' || (ui.run && ui.run.cid === c.id && ui.run.run)), lateNote = started ? `<div class="revbox"><b>${t('lateTitle')}</b><small>${t('lateNote')}</small></div>` : '';
     return `<div class="seqhead">${camp ? `<span class="sub small">${t('willGet')}: ${will}</span><button class="btn ghost sm" data-act="seqAuto" ${CLOUD && !ui.busy ? '' : 'disabled'} title="${CLOUD ? t('seqAutoHint') : t('aiDemoOnly')}">${ui.auto ? t('aiBusy') + ' ' + ui.auto : t('seqAuto')}</button>`
       : `<label class="fromf"><span>${t('fromMailbox')}</span>${from}</label>`}<span class="ty">${done} / ${list.length} ${t('approvedOf')}</span></div>
-      ${briefHint}${head2}${vtabs}${steps}${list.length < 5 ? `<button class="add" data-act="seqAdd">+ ${t('letter')} ${k}${list.length + 1} · ${t('addFollow')}</button>` : ''}<p class="sub small">${t('chainNote')} ${t('seqNote')}</p>
+      ${lateNote}${briefHint}${head2}${vtabs}${steps}${list.length < 5 ? `<button class="add" data-act="seqAdd">+ ${t('letter')} ${k}${list.length + 1} · ${t('addFollow')}</button>` : ''}<p class="sub small">${t('chainNote')} ${t('seqNote')}</p>
       ${camp ? `<div class="acts"><span class="sub small">${vs.map((x) => { const st = x === 'A' ? seq.steps : seq.alt[x].steps, ok = st.filter((y) => y.status === 'approved').length; return `${t('variant')} ${x}: ${ok} / ${st.length} ${t('approvedOf')}`; }).join(' · ')}</span><span class="grow"></span><button class="btn sm" data-act="ctab" data-v="send">${t('tabSend')} →</button></div>` : ''}`;
   }
 
@@ -1022,7 +1027,7 @@
     runStart() {
       const c = cur(); if (!CLOUD) return;
       if (!ui.runArm) { ui.runArm = true; render(); return; }
-      ui.runArm = false; ui.run = { cid: c.id, busy: true }; if (c.stage === 'new') c.stage = 'contacted'; commit();
+      ui.runArm = false; ui.run = { cid: c.id, busy: true }; if (c.stage === 'new') c.stage = 'contacted'; c.runAt = c.runAt || Date.now(); commit();
       setTimeout(() => Cloud.fn('campaignStart', { cardId: c.id, tz: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' }, 130000)
         .then((r) => { ui.runSkip = r && (r.forbidden || r.dupes) ? { cid: c.id, forbidden: r.forbidden || 0, dupes: r.dupes || 0 } : null; runPoll(c.id); }, (e) => { ui.run = { cid: c.id, err: runWhy(e) }; render(); }), 2200);
     },

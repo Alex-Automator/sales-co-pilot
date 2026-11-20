@@ -428,6 +428,67 @@ async function reply(fetchFn, keys, ctx) {
   return { body: String(o.body || '').replace(/\r/g, '').trim().slice(0, 6000), engine: ctx.engine };
 }
 
+// ---------- Whose working hours? ----------
+// Letters go out in the recipient's working hours. The time zone is an estimate from what is known about the person:
+// country and state, then the country ending of the email or the website, then the phone code. A country with several
+// zones gets its middle one unless the state says more. Nothing known -> the sender's own zone.
+const ZONES = { us: 'America/Chicago', ca: 'America/Winnipeg', mx: 'America/Mexico_City', br: 'America/Sao_Paulo', ar: 'America/Argentina/Buenos_Aires', cl: 'America/Santiago', co: 'America/Bogota', pe: 'America/Lima',
+  uk: 'Europe/London', gb: 'Europe/London', ie: 'Europe/Dublin', pt: 'Europe/Lisbon', es: 'Europe/Madrid', fr: 'Europe/Paris', be: 'Europe/Brussels', nl: 'Europe/Amsterdam', lu: 'Europe/Luxembourg', de: 'Europe/Berlin',
+  ch: 'Europe/Zurich', at: 'Europe/Vienna', it: 'Europe/Rome', dk: 'Europe/Copenhagen', no: 'Europe/Oslo', se: 'Europe/Stockholm', fi: 'Europe/Helsinki', is: 'Atlantic/Reykjavik', pl: 'Europe/Warsaw', cz: 'Europe/Prague',
+  sk: 'Europe/Bratislava', hu: 'Europe/Budapest', si: 'Europe/Ljubljana', hr: 'Europe/Zagreb', rs: 'Europe/Belgrade', ro: 'Europe/Bucharest', bg: 'Europe/Sofia', gr: 'Europe/Athens', ee: 'Europe/Tallinn', lv: 'Europe/Riga',
+  lt: 'Europe/Vilnius', ua: 'Europe/Kiev', md: 'Europe/Chisinau', tr: 'Europe/Istanbul', cy: 'Asia/Nicosia', mt: 'Europe/Malta', il: 'Asia/Jerusalem', ae: 'Asia/Dubai', sa: 'Asia/Riyadh', qa: 'Asia/Qatar', eg: 'Africa/Cairo',
+  za: 'Africa/Johannesburg', ng: 'Africa/Lagos', ke: 'Africa/Nairobi', in: 'Asia/Kolkata', pk: 'Asia/Karachi', kz: 'Asia/Almaty', ge: 'Asia/Tbilisi', am: 'Asia/Yerevan', az: 'Asia/Baku', sg: 'Asia/Singapore', my: 'Asia/Kuala_Lumpur',
+  th: 'Asia/Bangkok', vn: 'Asia/Ho_Chi_Minh', id: 'Asia/Jakarta', ph: 'Asia/Manila', hk: 'Asia/Hong_Kong', cn: 'Asia/Shanghai', tw: 'Asia/Taipei', jp: 'Asia/Tokyo', kr: 'Asia/Seoul', au: 'Australia/Adelaide', nz: 'Pacific/Auckland' };
+const COUNTRY = { 'united states': 'us', 'united states of america': 'us', usa: 'us', 'u.s.': 'us', 'u.s.a.': 'us', america: 'us', сша: 'us', canada: 'ca', канада: 'ca', mexico: 'mx', brazil: 'br', brasil: 'br', argentina: 'ar', chile: 'cl', colombia: 'co', peru: 'pe',
+  'united kingdom': 'uk', 'great britain': 'uk', england: 'uk', scotland: 'uk', wales: 'uk', britain: 'uk', великобританія: 'uk', ireland: 'ie', portugal: 'pt', spain: 'es', españa: 'es', іспанія: 'es', france: 'fr', франція: 'fr', belgium: 'be', netherlands: 'nl', 'the netherlands': 'nl', holland: 'nl', нідерланди: 'nl', luxembourg: 'lu',
+  germany: 'de', deutschland: 'de', німеччина: 'de', switzerland: 'ch', schweiz: 'ch', швейцарія: 'ch', austria: 'at', österreich: 'at', австрія: 'at', italy: 'it', italia: 'it', італія: 'it', denmark: 'dk', данія: 'dk', norway: 'no', норвегія: 'no', sweden: 'se', швеція: 'se', finland: 'fi', suomi: 'fi', фінляндія: 'fi', iceland: 'is',
+  poland: 'pl', polska: 'pl', польща: 'pl', czechia: 'cz', 'czech republic': 'cz', чехія: 'cz', slovakia: 'sk', hungary: 'hu', slovenia: 'si', croatia: 'hr', serbia: 'rs', romania: 'ro', румунія: 'ro', bulgaria: 'bg', greece: 'gr', estonia: 'ee', естонія: 'ee', latvia: 'lv', латвія: 'lv', lithuania: 'lt', литва: 'lt',
+  ukraine: 'ua', україна: 'ua', украина: 'ua', moldova: 'md', turkey: 'tr', türkiye: 'tr', туреччина: 'tr', cyprus: 'cy', malta: 'mt', israel: 'il', ізраїль: 'il', 'united arab emirates': 'ae', uae: 'ae', оае: 'ae', 'saudi arabia': 'sa', qatar: 'qa', egypt: 'eg', 'south africa': 'za', nigeria: 'ng', kenya: 'ke',
+  india: 'in', pakistan: 'pk', kazakhstan: 'kz', georgia: 'ge', armenia: 'am', azerbaijan: 'az', singapore: 'sg', malaysia: 'my', thailand: 'th', vietnam: 'vn', indonesia: 'id', philippines: 'ph', 'hong kong': 'hk', china: 'cn', taiwan: 'tw', japan: 'jp', 'south korea': 'kr', korea: 'kr', australia: 'au', 'new zealand': 'nz' };
+const US_STATE = (() => { const z = { 'America/New_York': 'ct de fl ga in ky me md ma mi nh nj ny nc oh pa ri sc vt va wv dc connecticut delaware florida georgia indiana kentucky maine maryland massachusetts michigan new-hampshire new-jersey new-york north-carolina ohio pennsylvania rhode-island south-carolina vermont virginia west-virginia',
+  'America/Chicago': 'al ar il ia ks la mn ms mo ne nd ok sd tn tx wi alabama arkansas illinois iowa kansas louisiana minnesota mississippi missouri nebraska north-dakota oklahoma south-dakota tennessee texas wisconsin',
+  'America/Denver': 'co id mt nm ut wy az colorado idaho montana new-mexico utah wyoming arizona', 'America/Los_Angeles': 'ca nv or wa california nevada oregon washington', 'America/Anchorage': 'ak alaska', 'Pacific/Honolulu': 'hi hawaii' };
+  const o = {}; Object.keys(z).forEach((tz) => z[tz].split(' ').forEach((k) => { o[k.replace(/-/g, ' ')] = tz; })); return o; })();
+const CA_PROV = { bc: 'America/Vancouver', 'british columbia': 'America/Vancouver', ab: 'America/Edmonton', alberta: 'America/Edmonton', sk: 'America/Regina', saskatchewan: 'America/Regina', mb: 'America/Winnipeg', manitoba: 'America/Winnipeg',
+  on: 'America/Toronto', ontario: 'America/Toronto', qc: 'America/Toronto', quebec: 'America/Toronto', québec: 'America/Toronto', ns: 'America/Halifax', 'nova scotia': 'America/Halifax', nb: 'America/Halifax', 'new brunswick': 'America/Halifax' };
+const PHONE = [['380', 'ua'], ['358', 'fi'], ['372', 'ee'], ['371', 'lv'], ['370', 'lt'], ['353', 'ie'], ['351', 'pt'], ['420', 'cz'], ['421', 'sk'], ['971', 'ae'], ['972', 'il'], ['44', 'uk'], ['49', 'de'], ['33', 'fr'], ['34', 'es'], ['39', 'it'], ['31', 'nl'], ['32', 'be'],
+  ['41', 'ch'], ['43', 'at'], ['45', 'dk'], ['46', 'se'], ['47', 'no'], ['48', 'pl'], ['40', 'ro'], ['36', 'hu'], ['30', 'gr'], ['90', 'tr'], ['61', 'au'], ['64', 'nz'], ['91', 'in'], ['81', 'jp'], ['82', 'kr'], ['65', 'sg'], ['52', 'mx'], ['55', 'br'], ['1', 'us']];
+const FREE_MAIL = /^(gmail|googlemail|outlook|hotmail|live|msn|yahoo|ymail|icloud|me|mac|aol|proton|protonmail|pm|gmx|web|mail|yandex|ya|ukr|i|meta|bigmir|rambler|zoho|fastmail|hey|tutanota|tuta)\.[a-z.]+$/;
+const mailDomain = (email) => String(email || '').trim().toLowerCase().split('@')[1] || '';
+// The client company's own domain, or '' for free mail services (people there are not one company).
+const companyDomain = (email) => { const d = mailDomain(email); return d && !FREE_MAIL.test(d) ? d : ''; };
+const ccOfHost = (host) => { const m = String(host || '').toLowerCase().replace(/^https?:\/\//, '').split('/')[0].match(/\.([a-z]{2})$/); return m && ZONES[m[1]] && !['co', 'io', 'me', 'ai', 'tv', 'cc'].includes(m[1]) ? m[1] : ''; };
+function tzOf(f) {
+  f = f || {};
+  const norm = (x) => String(x || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const c = norm(f.country), cc = COUNTRY[c] || (ZONES[c] ? c : ''), st = norm(f.state);
+  if (cc === 'us' && US_STATE[st]) return { tz: US_STATE[st], src: 'state' };
+  if (cc === 'ca' && CA_PROV[st]) return { tz: CA_PROV[st], src: 'state' };
+  if (cc) return { tz: ZONES[cc], src: 'country' };
+  if (!c && US_STATE[st] && st.length > 2) return { tz: US_STATE[st], src: 'state' };
+  const byMail = ccOfHost(mailDomain(f.email)); if (byMail) return { tz: ZONES[byMail], src: 'email' };
+  const bySite = ccOfHost(f.website); if (bySite) return { tz: ZONES[bySite], src: 'website' };
+  const ph = String(f.phone || f.companyPhone || '').replace(/[^\d+]/g, '');
+  if (/^(\+|00)/.test(ph)) { const n = ph.replace(/^(\+|00)/, ''), hit = PHONE.find((p) => n.startsWith(p[0])); if (hit) return { tz: ZONES[hit[1]], src: 'phone' }; }
+  return { tz: '', src: '' };
+}
+
+// An automatic answer (out of office and the like) is told by the standard headers mail programs add, then by the subject.
+function isAutoReply(headers) {
+  const h = {}; (headers || []).forEach((x) => { h[String(x.name).toLowerCase()] = String(x.value || ''); });
+  if (h['auto-submitted'] && !/^no$/i.test(h['auto-submitted'].trim())) return true;
+  if (h['x-autoreply'] || h['x-autorespond'] || h['x-auto-response-suppress'] || /auto.?repl/i.test(h.precedence || '')) return true;
+  return /^(\s*(re|aw)\s*:\s*)*(auto(matic|matische)?[ -]?(reply|response|antwort)|out of (the )?office|automatische antwort|abwesenheit|absence|réponse automatique|respuesta automática|fuera de la oficina|автоответ|автовідповідь|автоматична відповідь|автоматический ответ|poissa)/i.test(h.subject || '');
+}
+// 'auto' or 'human': what kind of letter did this person send last?
+async function replyKind(fetchFn, tokens, mailbox, d) {
+  const a = String(d.to || '').replace(/[^\w.+\-@]/g, ''), token = await tokenFor(fetchFn, tokens, mailbox, READ);
+  const found = await getJson(fetchFn, GMAIL + 'messages?maxResults=1&includeSpamTrash=true&q=' + encodeURIComponent(`from:${a} after:${Math.floor(((d.sentAt || [])[0] || 0) / 1000) - 120}`), token);
+  const id = ((found.messages || [])[0] || {}).id; if (!id) return 'human';
+  const m = await getJson(fetchFn, GMAIL + 'messages/' + id + '?format=metadata&metadataHeaders=Auto-Submitted&metadataHeaders=X-Autoreply&metadataHeaders=X-Autorespond&metadataHeaders=X-Auto-Response-Suppress&metadataHeaders=Precedence&metadataHeaders=Subject', token);
+  return isAutoReply((m.payload || {}).headers) ? 'auto' : 'human';
+}
+
 // ---------- Campaign run ----------
 const FAR = 9e15;
 const kept = (text, r) => String(text || '').replace(/[ \t]*\[\[([\s\S]*?)\]\]/g, (m, inner) => ((inner.match(/\{\{\s*\w+\s*\}\}/g) || []).every((x) => r[x.replace(/[{}\s]/g, '')]) ? ' ' + inner.trim() : '')).replace(/^ +/gm, '');
@@ -453,7 +514,7 @@ function planRun({ card, leads, myName, unitMs }) {
     const holes = []; st.forEach((x, i) => emptyVars(x.subject + '\n' + x.body, r).forEach((v) => holes.push(`${k}${i + 1}|${v}`)));
     const first = fill(st[0].subject, r).trim();
     const steps = st.map((x, i) => ({ subject: fill(x.subject, r).trim() || (i ? 'Re: ' + first : first), body: fill(x.body, r).replace(/\s+$/, ''), wait: i ? Math.max(1, (+x.day || 0) - (+st[i - 1].day || 0)) * unitMs : 0 }));
-    return { lead: l.id, to: l.f.email, name: [l.f.firstName, l.f.lastName].filter(Boolean).join(' '), company: l.f.company || '', jobTitle: l.f.jobTitle || '', tags: l.tags || [], variant: k, steps, holes };
+    return { lead: l.id, to: l.f.email, name: [l.f.firstName, l.f.lastName].filter(Boolean).join(' '), company: l.f.company || '', jobTitle: l.f.jobTitle || '', tags: l.tags || [], variant: k, steps, holes, tz: tzOf(l.f).tz, dom: companyDomain(l.f.email) };
   });
 }
 
@@ -479,4 +540,4 @@ async function sendStep(fetchFn, tokens, d, run, now) {
   return out;
 }
 
-module.exports = { sentSince, nextCheck, convo, reply, replyPrompt, unquote, mailText, READ, SEND, wroteBack, sendState, emptyVars, rawMail, sendMail, MAILER, mailToken, planRun, sendStep, threadState, tokenFor, localParts, inWindow, capFor, gapFor, watchPlan, UNIT, FAR, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };
+module.exports = { tzOf, companyDomain, isAutoReply, replyKind, sentSince, nextCheck, convo, reply, replyPrompt, unquote, mailText, READ, SEND, wroteBack, sendState, emptyVars, rawMail, sendMail, MAILER, mailToken, planRun, sendStep, threadState, tokenFor, localParts, inWindow, capFor, gapFor, watchPlan, UNIT, FAR, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };

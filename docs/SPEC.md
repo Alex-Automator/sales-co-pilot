@@ -262,5 +262,14 @@ card itself moves along the board as the deal.
 - One address gets one chain inside a campaign. The start reports how many were skipped as forbidden or repeated.
 - An attempt cut off in the middle is never repeated blindly: the server looks into the Sent folder and records
   what is true.
-- Not enforced yet: the same person in two different campaigns gets both; a limit per client company per day;
-  a pause at a high share of bounces; auto-replies count as replies; hours are the starter's, not the recipient's.
+- Working hours are the recipient's. The time zone is estimated from country and state, then the country ending of
+  the email or website, then the phone code; a country with several zones gets its middle one unless the state is
+  known; nothing known -> the starter's zone (marked * in the table).
+- No more than N new letters a day to one client company (same email domain; free mail services are not a company).
+  N is "per company" in the sending rules; the card says how many people wait for tomorrow.
+- When at least 2 addresses bounced and their share is over the limit in the sending rules, the campaign pauses,
+  the card gets a "Needs attention" badge and a warning; "Continue the campaign" resumes it.
+- An automatic answer (out of office) gets a card that asks for attention like any reply, but it is marked
+  (`kind: auto`, tag `auto-reply`) and must not be counted in reply statistics.
+- Letters edited after the start apply only to people added later; the Letters step says so.
+- Decided not to do: skipping people already written to from another campaign.
