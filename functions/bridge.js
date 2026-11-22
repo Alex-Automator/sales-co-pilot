@@ -66,10 +66,11 @@ module.exports = function makeBridge({ db, lib, fetchFn }) {
 
   // Who is calling: the key in the Authorization header (or, where a header cannot be set, in the address after /k/).
   async function whoIs(req) {
-    const h = String(req.headers.authorization || ''), fromPath = (String(req.path || '').match(/\/k\/(vk_[\w-]{20,})/) || [])[1];
-    const key = /^Bearer\s+vk_/i.test(h) ? h.replace(/^Bearer\s+/i, '').trim() : fromPath || '';
-    if (!key) return null;
-    const rec = await col('bridgekeys').doc(hashKey(key)).get(); if (!rec.exists || rec.data().off) return null;
+    // The key is accepted wherever it was put: "Bearer vk_…", a bare "vk_…", another header such as X-Api-Key, or the address.
+    const inHeaders = Object.keys(req.headers || {}).map((k) => (String(req.headers[k]).match(/vk_[\w-]{30,}/) || [])[0]).filter(Boolean)[0];
+    const fromPath = (String(req.path || '').match(/\/k\/(vk_[\w-]{20,})/) || [])[1], key = inHeaders || fromPath || '';
+    if (!key) { req.why = 'no key in the request'; return null; }
+    const rec = await col('bridgekeys').doc(hashKey(key)).get(); if (!rec.exists || rec.data().off) { req.why = 'the key is not the current one'; return null; }
     const uid = rec.data().uid, [user, meta] = await Promise.all([col('users').doc(uid).get(), col('meta').doc('app').get()]);
     if (!user.exists || !['admin', 'user'].includes(user.data().role)) return null;
     const superAdmin = meta.exists && meta.data().adminUid === uid;
@@ -210,8 +211,12 @@ module.exports = function makeBridge({ db, lib, fetchFn }) {
   async function handle(req, res) {
     res.set('Cache-Control', 'no-store');
     if (req.method === 'OPTIONS') { res.status(204).end(); return; }
-    if (req.method !== 'POST') { res.set('Allow', 'POST').status(405).json(rpcErr(null, -32000, 'This address accepts MCP requests by POST only.')); return; }
+    // One line per request in the server log (never the key itself): enough to see what Claude asked and why it was refused.
+    const seen = () => console.log('bridge request ' + JSON.stringify({ method: req.method, path: req.path, rpc: Array.isArray(req.body) ? 'batch' : (req.body || {}).method || '', tool: ((req.body || {}).params || {}).name || '', auth: req.headers.authorization ? String(req.headers.authorization).split(' ')[0].slice(0, 12) + ' …(' + String(req.headers.authorization).length + ' chars)' : 'none',
+      headers: Object.keys(req.headers || {}).filter((k) => !/^(x-forwarded|x-cloud|x-appengine|forwarded|traceparent|via|function-execution|x-client-data)/.test(k)).join(','), version: req.headers['mcp-protocol-version'] || '', agent: String(req.headers['user-agent'] || '').slice(0, 60), refused: req.why || '' }));
+    if (req.method !== 'POST') { seen(); res.set('Allow', 'POST').status(405).json(rpcErr(null, -32000, 'This address accepts MCP requests by POST only.')); return; }
     let me; try { me = await whoIs(req); } catch (e) { console.error('bridge auth failed', e.message); res.status(503).json(rpcErr(null, -32000, 'VECTOR is not available right now.')); return; }
+    seen();
     if (!me) { res.set('WWW-Authenticate', 'Bearer realm="VECTOR"').status(401).json(rpcErr(null, -32000, 'The VECTOR key is missing, wrong or switched off. Create a new key in VECTOR (AI helper -> Connect Claude) and put it into the connector settings.')); return; }
     const body = req.body, modernHdr = String(req.headers['mcp-protocol-version'] || '') === '2026-07-28';
     const isModern = (m) => modernHdr || ((m.params || {})._meta || {})['io.modelcontextprotocol/protocolVersion'] === '2026-07-28';
