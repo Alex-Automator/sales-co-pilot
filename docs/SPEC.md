@@ -293,3 +293,11 @@ Agreed next:
   only after "Поїхали"; these tools stay on "ask every time" in Claude; a daily limit of launches through the bridge.
 - Later: admins and operators connect their own Claude with their own rights; statistics and journal; a scheduled
   weekly review.
+
+Part 2 built 22 Nov 2026 (preparing, no launch): get_library, create_parameter, update_parameter (direction, audience,
+topic; never a company), create_vector, create_card, update_card (also mailbox, opt-out line, campaign criterion),
+add_recipients, update_recipient, set_letters. Checks on the server: forbidden list, repeated addresses, mailbox
+ownership, letter fields, a contact card per email per board. Letters are saved as drafts unless the person approved
+the exact text. Every write is logged with what was asked (`bridgelog`). Still to build in part 2b: drafting a letter
+and checking recipients against the criterion with VECTOR's own AI from the chat. Part 3: first letter from a contact
+card and launch after "Поїхали".
