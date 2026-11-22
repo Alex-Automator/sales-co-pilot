@@ -273,3 +273,23 @@ card itself moves along the board as the deal.
   (`kind: auto`, tag `auto-reply`) and must not be counted in reply statistics.
 - Letters edited after the start apply only to people added later; the Letters step says so.
 - Decided not to do: skipping people already written to from another campaign.
+
+## 22. Bridge to Claude (Revision 2), part 1 built 22 Nov 2026
+
+Goal: the person talks to Claude in Claude's own chat (also by voice and from the phone); Claude acts in VECTOR as a
+sales and marketing director with the person's rights. Nothing is launched without the person's explicit "Поїхали".
+
+Built (part 1, read only): an MCP server (`functions/bridge.js`, function `bridge`, Streamable HTTP, tools only,
+works with the 2025 handshake and the stateless 2026-07-28 revision) and a personal key (`bridgeKey`, super admin
+only for now). Tools: vector_overview, get_parameter, get_vector, get_card, list_recipients, campaign_status,
+get_conversation, find. Signatures and keys are never returned. Every call is logged.
+
+Agreed next:
+- Part 2: create and set up everything a person can click before a launch: direction, audience, topic (hook, offer,
+  criterion), vector, cards (contact, company, campaign, task), recipients, criterion check, letters, mailbox choice.
+  Claude asks when data is missing, agrees the topic hook with the person, reviews and corrects letters drafted
+  inside VECTOR. Never: sending rules, access rights, forbidden list, mailboxes, deleting.
+- Part 3: the first letter from a contact card (one person, same sending rules) and launch tools that Claude calls
+  only after "Поїхали"; these tools stay on "ask every time" in Claude; a daily limit of launches through the bridge.
+- Later: admins and operators connect their own Claude with their own rights; statistics and journal; a scheduled
+  weekly review.

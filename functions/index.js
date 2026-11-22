@@ -1,6 +1,6 @@
 // Server part of VECTOR. Runs in Cloud Functions for Firebase; the API keys live in Secret Manager
 // and never reach the browser or the repository.
-const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const { onCall, onRequest, HttpsError } = require('firebase-functions/v2/https');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { setGlobalOptions } = require('firebase-functions/v2');
 const { defineSecret } = require('firebase-functions/params');
@@ -482,4 +482,27 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
     } catch (e) { console.error('bounce check failed', run.cid, e.message); }
   }
   if (note.due || note.checked || Object.keys(note.boxes).length) console.log('tick summary ' + JSON.stringify(note));
+});
+
+// ---------- The bridge to Claude ----------
+// bridge is the address Claude connects to as a custom connector (MCP). It is public on the network, like any web
+// address, but answers only to a personal VECTOR key. bridgeKey lets the super admin create, see and switch off that key.
+const bridge = require('./bridge')({ db, lib, fetchFn: (...a) => fetch(...a) });
+exports.bridge = onRequest({ timeoutSeconds: 120, memory: '512MiB', invoker: 'public', maxInstances: 5 }, (req, res) => bridge.handle(req, res).catch((e) => { console.error('bridge crashed', e.message); if (!res.headersSent) res.status(500).json({ jsonrpc: '2.0', id: null, error: { code: -32603, message: 'Internal error.' } }); }));
+
+exports.bridgeKey = onCall({}, async (req) => {
+  if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+  const uid = req.auth.uid, op = (req.data || {}).op, meta = await db().collection('meta').doc('app').get();
+  if (!meta.exists || meta.data().adminUid !== uid) throw new HttpsError('permission-denied', 'For now only the super admin can connect Claude.');
+  const keys = db().collection('bridgekeys'), own = await keys.where('uid', '==', uid).get(), live = own.docs.filter((x) => !x.data().off);
+  const url = `https://europe-west1-${process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || 'vector-sales-co-pilot'}.cloudfunctions.net/bridge`;
+  const state = (docs) => ({ url, on: docs.length > 0, createdAt: docs.length ? Math.max(...docs.map((x) => x.data().at || 0)) : 0, lastUsed: docs.length ? Math.max(...docs.map((x) => x.data().last || 0)) : 0, calls: docs.reduce((n, x) => n + (x.data().calls || 0), 0) });
+  if (op === 'status') return state(live);
+  if (op === 'revoke' || op === 'create') { const b = db().batch(); own.docs.forEach((x) => b.delete(x.ref)); await b.commit(); }
+  if (op === 'revoke') return state([]);
+  if (op === 'create') { // the key is shown once; only its fingerprint is stored
+    const key = bridge.newKey(), now = Date.now(); await keys.doc(bridge.hashKey(key)).set({ uid, at: now, last: 0, calls: 0 });
+    return Object.assign(state([]), { on: true, createdAt: now, key });
+  }
+  throw new HttpsError('invalid-argument', 'Unknown request.');
 });

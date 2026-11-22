@@ -879,11 +879,22 @@
     let body;
     if (ui.aiView === 'guide') {
       body = `<button class="link" data-act="aiHome">${t('backHome')}</button><h2>${t('guideTitle')}</h2>${(GUIDE[S.lang] || GUIDE.en).map((g) => `<div class="gstep"><b>${g[0]}</b><p>${g[1]}</p></div>`).join('')}`;
+    } else if (ui.aiView === 'claude') {
+      // Connecting Claude: the address and a personal key the person puts into a custom connector in Claude.
+      const b = ui.bridge || {}, when = (ms) => (ms ? new Date(ms).toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—');
+      const copy = (label, val, id) => `<div class="kv"><small>${label}</small><div class="kvrow"><input class="in" readonly value="${esc(val)}" id="${id}"><button class="btn ghost sm" data-act="brCopy" data-id="${id}">${t(ui.brCopied === id ? 'brCopied' : 'brCopy')}</button></div></div>`;
+      body = `<button class="link" data-act="aiHome">${t('backHome')}</button><h2>${t('brTitle')}</h2><p class="sub">${t('brIntro')}</p>`
+        + (b.loading ? `<p class="sub">${t('cvLoading')}</p>` : b.err ? `<div class="revbox"><small>${esc(b.err)}</small></div>` : `
+        ${b.key ? `<div class="revbox"><b>${t('brKeyOnce')}</b>${copy(t('brUrl'), b.url, 'brU')}${copy(t('brHeader'), 'Authorization', 'brH')}${copy(t('brValue'), 'Bearer ' + b.key, 'brK')}<small>${t('brKeyNote')}</small></div>`
+          : b.on ? `<p class="sub small">${t('brOn')} ${when(b.createdAt)} · ${t('brLast')} ${when(b.lastUsed)} · ${t('brCalls')} ${b.calls || 0}</p>${copy(t('brUrl'), b.url, 'brU')}` : `<p class="sub small">${t('brOff')}</p>`}
+        <div class="acts tight"><button class="btn sm ${ui.brArm ? 'danger' : ''}" data-act="brCreate">${t(ui.brArm ? 'brSure' : b.on ? 'brNew' : 'brCreate')}</button>${b.on ? `<button class="btn ghost sm danger" data-act="brRevoke">${t('brRevoke')}</button>` : ''}</div>
+        <div class="bh sp">${t('brHowTitle')}</div>${t('brHow').split('|').map((x, i) => `<div class="gstep"><b>${i + 1}</b><p>${x}</p></div>`).join('')}
+        <p class="sub small">${t('brScope')}</p>`);
     } else {
       const hello = S.guideSeen ? `<button class="mi" data-act="aiGuide"><span>${t('readGuide')}</span></button>`
         : `<div class="hello"><p>${t('aiHello')}</p><div class="acts"><button class="btn sm" data-act="aiGuide">${t('readGuide')}</button><button class="btn ghost sm" data-act="guideLater">${t('later')}</button></div></div>`;
       const log = ui.aiLog.map((x) => `<div class="bub q">${esc(t('qa_' + x))}</div><div class="bub a">${esc(answer(x))}</div>`).join('');
-      body = `${hello}<div class="bh sp">${t('quick')}</div>${['today', 'meet', 'best'].map((q) => `<button class="chip" data-act="aiAsk" data-q="${q}">${t('qa_' + q)}</button>`).join('')}
+      body = `${hello}${CLOUD && au.super ? `<button class="mi" data-act="brOpen"><span>${t('brTitle')}</span></button>` : ''}<div class="bh sp">${t('quick')}</div>${['today', 'meet', 'best'].map((q) => `<button class="chip" data-act="aiAsk" data-q="${q}">${t('qa_' + q)}</button>`).join('')}
         <div class="ailog">${log}</div><p class="sub small">${t('aiScope')}</p>`;
     }
     return `<aside class="aipanel"><div class="aihead"><b>${svg(UI_ICONS.spark)}${t('aiHelper')}</b><button class="dots" data-act="aiToggle">×</button></div>
@@ -1061,7 +1072,13 @@
     calNext() { ui.cal++; render(); },
     aiToggle() { ui.ai = !ui.ai; if (!ui.ai && !S.guideSeen) { S.guideSeen = true; save(); } render(); },
     aiGuide() { ui.aiView = 'guide'; S.guideSeen = true; commit(); },
-    aiHome() { ui.aiView = 'home'; render(); },
+    aiHome() { ui.aiView = 'home'; if (ui.bridge) ui.bridge.key = ''; render(); },
+    brOpen() { ui.aiView = 'claude'; ui.brArm = false; ui.bridge = { loading: true }; render(); Cloud.fn('bridgeKey', { op: 'status' }).then((r) => { ui.bridge = r; render(); }, (e) => { ui.bridge = { err: aiWhy(e) }; render(); }); },
+    // A new key switches the old one off, so the button asks twice when a key already exists.
+    brCreate() { const b = ui.bridge || {}; if (b.on && !b.key && !ui.brArm) { ui.brArm = true; render(); return; } ui.brArm = false; ui.bridge = { loading: true }; render();
+      Cloud.fn('bridgeKey', { op: 'create' }).then((r) => { ui.bridge = r; render(); }, (e) => { ui.bridge = { err: aiWhy(e) }; render(); }); },
+    brRevoke() { ui.brArm = false; ui.bridge = { loading: true }; render(); Cloud.fn('bridgeKey', { op: 'revoke' }).then((r) => { ui.bridge = r; render(); }, (e) => { ui.bridge = { err: aiWhy(e) }; render(); }); },
+    brCopy(d) { const el = document.getElementById(d.id); if (!el) return; const done = () => { ui.brCopied = d.id; render(); }; (navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(el.value) : Promise.reject()).then(done, () => { el.select(); try { document.execCommand('copy'); } catch (e) { /* the field stays selected for a manual copy */ } done(); }); },
     guideLater() { S.guideSeen = true; ui.ai = false; commit(); },
     aiAsk(d) { ui.aiLog.push(d.q); render(); const l = document.querySelector('.aibody'); if (l) l.scrollTop = l.scrollHeight; },
     prepDoc() {

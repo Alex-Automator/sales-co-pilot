@@ -57,3 +57,11 @@ gcloud iam service-accounts add-iam-policy-binding vector-mailer@vector-sales-co
 ```
 
 Функції запуску кампаній: `campaignStart`, `campaignStatus`, `campaignStop` і `tick` (за розкладом кожні дві хвилини). Дані запуску лежать у колекціях `runs`, `sends` і `mailstate`; з браузера вони недоступні.
+
+## Міст до Claude
+
+Функції `bridge` (адреса, до якої підключається Claude як власний конектор, протокол MCP) і `bridgeKey` (створення й вимкнення особистого ключа). Адреса: `https://europe-west1-vector-sales-co-pilot.cloudfunctions.net/bridge`.
+
+Адреса відкрита в мережі, як будь-яка вебадреса, але відповідає лише на запити з ключем. Ключ створюється в програмі (AI helper → Connect Claude), показується один раз, на сервері зберігається лише його відбиток (колекція `bridgekeys`). Кожна дія Claude записується в `bridgelog`. Обидві колекції недоступні з браузера.
+
+У Claude: Customize → Connectors → Add custom connector → адреса, Authentication «No sign in», Request header `Authorization` зі значенням `Bearer vk_…`.
