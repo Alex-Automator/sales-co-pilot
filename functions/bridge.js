@@ -4,7 +4,7 @@
 const crypto = require('crypto');
 
 const VERSIONS = ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
-const SERVER = { name: 'vector-sales-co-pilot', title: 'VECTOR — Sales-co-pilot', version: '0.7.2' };
+const SERVER = { name: 'vector-sales-co-pilot', title: 'VECTOR — Sales-co-pilot', version: '0.7.3' };
 const hashKey = (key) => crypto.createHash('sha256').update(String(key)).digest('hex');
 const newKey = () => 'vk_' + crypto.randomBytes(32).toString('base64url');
 
@@ -474,11 +474,11 @@ module.exports = function makeBridge({ db, lib, fetchFn, calls }) {
     const ok = (result) => ({ jsonrpc: '2.0', id, result: Object.assign(modern ? { resultType: 'complete', _meta: meta } : {}, result) });
     switch (msg.method) {
       case 'initialize': { const want = String(p.protocolVersion || ''), v = VERSIONS.includes(want) && want !== '2026-07-28' ? want : '2025-06-18';
-        return ok({ protocolVersion: v, capabilities: { tools: { listChanged: false } }, serverInfo: SERVER, instructions: INSTRUCTIONS }); }
-      case 'server/discover': return ok({ supportedVersions: VERSIONS, capabilities: { tools: { listChanged: false } }, serverInfo: SERVER, instructions: INSTRUCTIONS });
+        return ok({ protocolVersion: v, capabilities: { tools: {} }, serverInfo: SERVER, instructions: INSTRUCTIONS }); }
+      case 'server/discover': return ok({ supportedVersions: VERSIONS, capabilities: { tools: {} }, serverInfo: SERVER, instructions: INSTRUCTIONS });
       case 'ping': return ok({});
       case 'tools/list': console.log('bridge tools/list answered with ' + TOOLS.length + ' tools');
-        return ok(Object.assign({ tools: TOOLS.map(publicTool) }, modern ? { ttlMs: 300000, cacheScope: 'private' } : {}));
+        return ok(Object.assign({ tools: TOOLS.map(publicTool) }, modern ? { ttlMs: 30000, cacheScope: 'private' } : {}));
       case 'tools/call': {
         const tool = TOOLS.find((t) => t.name === p.name), run = tool && handlers[tool.name];
         if (!run) return rpcErr(id, -32602, `Unknown tool: ${p.name}`);
