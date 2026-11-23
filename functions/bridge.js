@@ -4,7 +4,7 @@
 const crypto = require('crypto');
 
 const VERSIONS = ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
-const SERVER = { name: 'vector-sales-co-pilot', title: 'VECTOR — Sales-co-pilot', version: '0.7.0' };
+const SERVER = { name: 'vector-sales-co-pilot', title: 'VECTOR — Sales-co-pilot', version: '0.7.1' };
 const hashKey = (key) => crypto.createHash('sha256').update(String(key)).digest('hex');
 const newKey = () => 'vk_' + crypto.randomBytes(32).toString('base64url');
 
@@ -28,6 +28,7 @@ Preparing things (you can create and set up everything the person could click to
 - Which company writes: the person owns several companies. Choose by the company profiles in vector_overview (what each does, its clients, when to write from it) and by its directions, never by the name alone. When two companies could fit, name both with the reason for each and ask. When a profile is empty, say so and offer to draft it: read the company's website if you can, ask the person where the boundary with their other companies lies, show the draft, and save it with set_company_profile after they agree.
 - Before creating anything, look for what already exists: find for a person or company, vector_overview for a vector that fits the kind of client and the job title. Reuse a fitting vector; when several fit or none does, say what you see and ask, or propose a new one and name its four parameters before you create it.
 - A topic's hook is the reason to write. Agree it with the person in words before you set or change it, and tell them when the topic is used by other vectors, because the change will reach them too.
+- Lists of people often live outside VECTOR: in the person's Google Drive sheets, old lead tables, exported files. VECTOR itself has no access to them; you may have it through your other connectors (Google Drive, Sheets). When the person refers to such a table, look for it there, tell them which file you found (name, date, how many rows, which columns) and wait for them to confirm it is the right one before you copy anything. Then put the people into a campaign with add_recipients (200 per call), keeping company, job title, website and country where the table has them. Rows without an email cannot be written to: say how many there are.
 - From a business card photo or a few words: read what is there, ask only for what is missing and matters (the email above all), then create the contact card in the right vector.
 - Letters: write them yourself from the topic settings, the library links of the vector (get_vector shows them) and what the person told you, or improve what is already in the card. Show the exact text to the person. Save letters as drafts; mark a letter approved only after the person approved that exact text in this conversation.
 - In campaign letters use only these fields: {{firstName}} {{lastName}} {{company}} {{jobTitle}} {{city}} {{project}} {{myName}}. A phrase that depends on a field some recipients lack goes in [[double brackets]]: it is dropped for people without it. Do not write a signature: the mailbox signature is added automatically. A letter to one contact needs no fields at all.
