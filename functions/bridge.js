@@ -4,7 +4,7 @@
 const crypto = require('crypto');
 
 const VERSIONS = ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
-const SERVER = { name: 'vector-sales-co-pilot', title: 'VECTOR — Sales-co-pilot', version: '0.4.0' };
+const SERVER = { name: 'vector-sales-co-pilot', title: 'VECTOR — Sales-co-pilot', version: '0.5.0' };
 const hashKey = (key) => crypto.createHash('sha256').update(String(key)).digest('hex');
 const newKey = () => 'vk_' + crypto.randomBytes(32).toString('base64url');
 
@@ -20,6 +20,7 @@ How to work
 - Start every conversation with vector_overview: it shows the companies, parameters and vectors and how busy each one is. Read a topic's settings (get_parameter) before judging or writing letters for it.
 - Say what you found in plain words, in the language the person writes in. Give ids only when they help.
 - When information is missing for a good vector or a good campaign (who exactly the client is, what is offered, what proof there is, which mailbox, what the next step should be), ask. One or two precise questions at a time; never invent facts about the person's companies, prices, clients or results.
+- Before writing to a company or a person, check the past: find (cards in VECTOR) and find_correspondence (the person's real mailboxes). Say briefly what was there: with whom, when, how it ended.
 - Client replies and contact details are confidential business data: use them only for the task at hand.
 - Nothing is launched without the person's explicit go-ahead in this conversation ("Поїхали" or equally clear words). Preparing is fine; launching is their decision.
 
@@ -67,6 +68,12 @@ TOOLS.push(
   { name: 'get_library', title: 'Library links', read: true,
     description: 'The Library of the Database: documents, videos and pages the person collected for letters (title, address, priority, company). Use them as proof and as links in letters instead of inventing any.',
     inputSchema: obj({}) },
+  { name: 'find_correspondence', title: 'Find past correspondence in the mailboxes', read: true,
+    description: 'Searches the person\'s own work mailboxes (the company mailboxes they own in VECTOR) for past correspondence with a company or a person: give a company name (Sweco), a domain (sweco.fi) or an email address. Returns conversations, newest first: subject, who took part, dates, how many letters, who wrote last and the beginning of the last letter. Use it before writing to someone, to learn whether you already talked, with whom and how it ended. Unlike find, this looks into real mail, including letters that never went through VECTOR. Open a conversation with read_correspondence.',
+    inputSchema: obj({ query: str('Company name, domain or email address.'), mailbox: str('Optional: search only this mailbox. Default: all mailboxes the person owns.'), also_mentions: { type: 'boolean', description: 'Also include letters that only mention the name in their text (default: only letters from or to these people; mentions are added automatically when nothing else is found).' } }, ['query']) },
+  { name: 'read_correspondence', title: 'Read one past conversation', read: true,
+    description: 'The full text of one conversation found by find_correspondence: every letter with sender, date and text, without quoted tails.',
+    inputSchema: obj({ mailbox: str('The mailbox, as returned by find_correspondence.'), thread: str('The thread id, as returned by find_correspondence.') }, ['mailbox', 'thread']) },
   { name: 'create_parameter', title: 'Create a direction, audience or topic',
     description: 'Creates a new direction (what is sold; belongs to one company), audience (who decides at the client) or topic (the reason to write). Check vector_overview first so that you do not create a second copy of something that exists. Companies are created by the person in VECTOR, not here. Settings — direction: desc, criteria (list). Audience: role (decision, influence or user), tone (formal, neutral or informal), regions, language, pains, notes. Topic: hook, offer, tones (list of: direct, friendly, expert, formal, brief, curious), cta, proof, avoid, sample, keywords, crit (what a client company must have or do to be written to), tag, terms (words to look for on a site, comma separated).',
     inputSchema: obj({ kind: { type: 'string', enum: ['direction', 'audience', 'topic'] }, name: str('Short name shown on the screen.'), company_id: str('For a direction: the company it belongs to.'), settings: { type: 'object', description: 'Settings as listed in the description.', additionalProperties: true } }, ['kind', 'name']) },
@@ -242,6 +249,8 @@ module.exports = function makeBridge({ db, lib, fetchFn }) {
     if (unknown.length) throw new ToolError(`Unknown settings for a ${kind}: ${unknown.join(', ')}. Allowed: ${Object.keys(spec).join(', ')}.`);
     return out;
   }
+  // The mailboxes this person owns, across the companies they see. Mail is read only from one's own mailboxes.
+  const myBoxes = async (me) => { const out = []; (await mine(me, 'params')).filter((p) => p.zone === 'company').forEach((co) => (((co.s || {}).mailboxes) || []).forEach((b) => { if (b.owner === me.uid && b.email) out.push({ email: b.email, company: co.name }); })); return out; };
   const usedBy = async (zone, id) => (await col('vectors').where(zone, '==', id).get()).size;
   const banned = async (uid) => { const g = await col('guards').doc(String(uid)).get(); return ((g.exists && g.data().list) || []).map((x) => String(x).trim().toLowerCase().replace(/^@/, '')).filter(Boolean); };
   const isBanned = (list, email) => list.some((g) => email === g || email.endsWith('@' + g));
@@ -257,6 +266,25 @@ module.exports = function makeBridge({ db, lib, fetchFn }) {
     async get_library(me) {
       const sh = await col('workspace').doc('shared').get(), docs = (sh.exists && sh.data().docs) || [], params = await mine(me, 'params'), name = {}; params.forEach((p) => { name[p.id] = p.name; });
       return { links: docs.filter((d) => !d.company || name[d.company]).sort((a, b) => (a.priority || 9) - (b.priority || 9)).map((d) => drop({ title: d.title, address: d.url, priority: d.priority, company: name[d.company] || '' })) };
+    },
+    async find_correspondence(me, a) {
+      const raw = txt(a.query, 80).replace(/["'(){}\[\]:<>\\]/g, ' ').replace(/\s+/g, ' ').trim(); if (raw.length < 2) throw new ToolError('Give a company name, a domain or an email address.');
+      const boxes = await myBoxes(me), want = txt(a.mailbox, 200).toLowerCase(), use = want ? boxes.filter((b) => b.email.toLowerCase() === want) : boxes;
+      if (!use.length) throw new ToolError(want ? `${a.mailbox} is not a mailbox you own in VECTOR. Yours: ${boxes.map((b) => b.email).join(', ') || 'none'}.` : 'You own no mailbox in VECTOR yet: add one in the company settings.');
+      // "Sweco" also matches addresses at sweco.fi and sweco.com: Gmail compares the words inside an address.
+      const term = /\s/.test(raw) ? `"${raw}"` : raw, people = `{from:${term} to:${term} cc:${term}}`, tokens = {}, found = [], failed = [];
+      const look = async (q) => { for (const b of use) { try { (await lib.mailSearch(fetchFn, tokens, b.email, q + ' -in:chats', 8)).forEach((x) => found.push(Object.assign({ mailbox: b.email, company: b.company }, x))); } catch (e) { failed.push(`${b.email}: ${clip(e.message, 120)}`); } } };
+      await look(a.also_mentions ? `{from:${term} to:${term} cc:${term} "${raw}"}` : people); let widened = false;
+      if (!found.length && !a.also_mentions && !failed.length) { widened = true; await look(`"${raw}"`); }
+      const day = (ms) => (ms ? new Date(ms).toISOString().slice(0, 10) : '');
+      return drop({ searched_mailboxes: use.map((b) => b.email), could_not_read: failed, note: !found.length ? 'Nothing found in these mailboxes: no letters from or to such people and no mention of this name.' : widened ? 'No letters from or to people at this company; these conversations only mention the name.' : '',
+        conversations: found.sort((x, y) => y.last - x.last).slice(0, 20).map((x) => drop({ mailbox: x.mailbox, thread: x.thread, subject: x.subject, people: x.people, letters: x.letters, first_letter: day(x.first), last_letter: day(x.last), last_word: x.lastFromUs ? 'ours (no answer after it)' : 'theirs: ' + clip(x.lastFrom.replace(/<.*>/, '').replace(/"/g, '').trim(), 60), last_letter_begins: x.snippet })) });
+    },
+    async read_correspondence(me, a) {
+      const box = (await myBoxes(me)).find((b) => b.email.toLowerCase() === txt(a.mailbox, 200).toLowerCase()); if (!box) throw new ToolError('This is not a mailbox you own in VECTOR.');
+      let msgs; try { msgs = await lib.mailThread(fetchFn, {}, box.email, a.thread); } catch (e) { throw new ToolError('The conversation could not be read: ' + clip(e.message, 160)); }
+      if (!msgs.length) throw new ToolError('This conversation was not found in the mailbox.');
+      return { mailbox: box.email, subject: msgs[0].subject, letters: msgs.slice(-25).map((m) => ({ from: m.me ? 'us' : clip(m.from, 120), to: clip(m.to, 200), at: new Date(m.at).toISOString().slice(0, 16) + 'Z', text: clip(m.text, 3500) })) };
     },
     async create_parameter(me, a) {
       const kind = a.kind, name = txt(a.name, 120); if (!SETTINGS[kind]) throw new ToolError('kind must be direction, audience or topic. Companies are created by the person in VECTOR.'); if (!name) throw new ToolError('Give the parameter a name.');

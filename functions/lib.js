@@ -408,6 +408,22 @@ async function convo(fetchFn, tokens, mailbox, addr, sinceMs, threadIds) {
   }
   return all.sort((x, y) => x.at - y.at).slice(-10);
 }
+// Past correspondence in a mailbox: threads that match a Gmail query, newest first, each with who took part and how it ended.
+async function mailSearch(fetchFn, tokens, mailbox, q, max) {
+  const token = await tokenFor(fetchFn, tokens, mailbox, READ), list = await getJson(fetchFn, GMAIL + 'threads?maxResults=' + (max || 10) + '&q=' + encodeURIComponent(q), token), out = [];
+  for (const th of (list.threads || []).slice(0, max || 10)) {
+    const d = await getJson(fetchFn, GMAIL + 'threads/' + th.id + '?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Subject', token), ms = d.messages || []; if (!ms.length) continue;
+    const people = {}, mine = mailbox.toLowerCase(); ms.forEach((m) => ['from', 'to', 'cc'].forEach((h) => (headOf(m, h).match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi) || []).forEach((e) => { if (e.toLowerCase() !== mine) people[e.toLowerCase()] = 1; })));
+    const last = ms[ms.length - 1], lastFrom = headOf(last, 'from');
+    out.push({ thread: th.id, subject: headOf(ms[0], 'subject'), letters: ms.length, first: +ms[0].internalDate || 0, last: +last.internalDate || 0, people: Object.keys(people).slice(0, 12), lastFromUs: lastFrom.toLowerCase().includes(mine), lastFrom, snippet: String(last.snippet || '').slice(0, 300) });
+  }
+  return out.sort((a, b) => b.last - a.last);
+}
+// One thread in full: every letter with its text, without quoted tails.
+async function mailThread(fetchFn, tokens, mailbox, id) {
+  const d = await getJson(fetchFn, GMAIL + 'threads/' + String(id).replace(/[^\w-]/g, '') + '?format=full', await tokenFor(fetchFn, tokens, mailbox, READ));
+  return (d.messages || []).map((m) => { const from = headOf(m, 'from'); return { at: +m.internalDate || 0, me: from.toLowerCase().includes(mailbox.toLowerCase()), from, to: headOf(m, 'to'), subject: headOf(m, 'subject'), text: mailText(m) }; }).sort((a, b) => a.at - b.at);
+}
 function replyPrompt(ctx) {
   const talk = (ctx.messages || []).map((m) => `${m.me ? 'WE WROTE' : 'THEY WROTE'}:\n${m.text}`).join('\n\n');
   return {
@@ -540,4 +556,4 @@ async function sendStep(fetchFn, tokens, d, run, now) {
   return out;
 }
 
-module.exports = { tzOf, companyDomain, isAutoReply, replyKind, sentSince, nextCheck, convo, reply, replyPrompt, unquote, mailText, READ, SEND, wroteBack, sendState, emptyVars, rawMail, sendMail, MAILER, mailToken, planRun, sendStep, threadState, tokenFor, localParts, inWindow, capFor, gapFor, watchPlan, UNIT, FAR, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };
+module.exports = { mailSearch, mailThread, tzOf, companyDomain, isAutoReply, replyKind, sentSince, nextCheck, convo, reply, replyPrompt, unquote, mailText, READ, SEND, wroteBack, sendState, emptyVars, rawMail, sendMail, MAILER, mailToken, planRun, sendStep, threadState, tokenFor, localParts, inWindow, capFor, gapFor, watchPlan, UNIT, FAR, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };
