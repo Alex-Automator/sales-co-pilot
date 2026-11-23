@@ -30,6 +30,8 @@ const Cloud = (function () {
       }
       await ref.set({ name: u.displayName || '', email: u.email || '', photo: u.photoURL || '', role: r, created: now() });
     }
+    // The server needs the person's time zone when something is started for them outside this page (through the Claude bridge).
+    try { const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; if (snap.exists && tz && snap.data().tz !== tz) ref.update({ tz }).catch(() => {}); } catch (e) { /* no time zone, no harm */ }
     // The first person who signed in is the super admin for good; everyone learns who that is, nobody can change it.
     const ownerUid = m.exists ? m.data().adminUid : '', sup = ownerUid === u.uid;
     subs.push(ref.onSnapshot((s) => {

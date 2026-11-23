@@ -155,10 +155,15 @@ const inChunks = async (items, n, fn) => { for (let i = 0; i < items.length; i +
 
 // campaignStart({ cardId, tz }) -> { queued, already, from }.
 // Starting again adds only people who have not been written to yet: nobody gets the first letter twice.
-exports.campaignStart = onCall({ timeoutSeconds: 120, memory: '512MiB' }, async (req) => {
-  const { uid, d, card, superAdmin, user } = await cardGuard(req);
-  if (card.type !== 'campaign') throw new HttpsError('failed-precondition', 'This is not a campaign card.');
-  const [old, vec, leadSnap, rules] = await Promise.all([sendsOf(d.cardId), db().collection('vectors').doc(String(card.vid)).get(), db().collection('leads').where('cid', '==', d.cardId).get(), rulesNow()]);
+// A contact card is the smallest campaign: one person, one chain (variant A), the same sending rules.
+const contactAsLead = (card, id) => { const parts = String(card.title || '').trim().split(/\s+/).filter((x) => x && x !== '-'), f = Object.assign({}, card.f || {});
+  f.firstName = f.firstName || parts[0] || ''; f.lastName = f.lastName || parts.slice(1).join(' '); return { id, f, off: false, blocked: card.blocked || '', tags: card.tags || [] }; };
+const startHandler = async (req) => {
+  const { uid, d, card, superAdmin, user } = await cardGuard(req), solo = card.type === 'contact';
+  if (card.type !== 'campaign' && !solo) throw new HttpsError('failed-precondition', 'Letters are sent from a campaign or a contact card.');
+  if (solo && !String((card.f || {}).email || '').trim()) throw new HttpsError('failed-precondition', 'This contact has no email address.');
+  if (solo) card.seq = Object.assign({}, card.seq || {}, { alt: {}, split: 'even' });
+  const [old, vec, leadSnap, rules] = await Promise.all([sendsOf(d.cardId), db().collection('vectors').doc(String(card.vid)).get(), solo ? { docs: [{ data: () => contactAsLead(card, d.cardId) }] } : db().collection('leads').where('cid', '==', d.cardId).get(), rulesNow()]);
   if (!vec.exists) throw new HttpsError('not-found', 'The vector of this card was not found.');
   const v = vec.data(), co = await param(v.company), boxes = (co.s || {}).mailboxes || [];
   const mine = boxes.filter((m) => superAdmin || m.owner === uid), want = (card.seq || {}).from;
@@ -209,10 +214,11 @@ exports.campaignStart = onCall({ timeoutSeconds: 120, memory: '512MiB' }, async 
   const runRef = db().collection('runs').doc(d.cardId), prev = await runRef.get();
   const queue = (prev.exists && prev.data().status === 'active' ? (prev.data().queue || []).filter((x) => !ids.includes(x)) : []).concat(ids);
   const meta = {}, pm = (prev.exists && prev.data().meta) || {}; queue.forEach((id) => { if (pm[id]) meta[id] = pm[id]; }); fresh.forEach((p) => { meta[`${d.cardId}_${p.lead}`] = `${p.tz || ''}|${p.dom || ''}`; });
-  await runRef.set({ meta, bounceAck: (prev.exists && prev.data().bounceAck) || 0, cid: d.cardId, vid: card.vid, owner: uid, acl: card.acl || [], cardTitle: card.title || '', cardVec: card.vec || {}, from: box.email, fromName: box.name || user.name || '', sig: box.sig || '', sigHtml: box.sigHtml || '',
+  await runRef.set({ kind: solo ? 'contact' : 'campaign', meta, bounceAck: (prev.exists && prev.data().bounceAck) || 0, cid: d.cardId, vid: card.vid, owner: uid, acl: card.acl || [], cardTitle: card.title || '', cardVec: card.vec || {}, from: box.email, fromName: box.name || user.name || '', sig: box.sig || '', sigHtml: box.sigHtml || '',
     foot: optOn ? (v.opt && v.opt.text) || '' : '', tz: String(d.tz || 'UTC').slice(0, 60), unitMs, status: 'active', startedAt: prev.exists ? prev.data().startedAt || now : now, updatedAt: now, queue });
   return { queued: fresh.length, already: plan.length - fresh.length, from: box.email, forbidden, dupes };
-});
+};
+exports.campaignStart = onCall({ timeoutSeconds: 120, memory: '512MiB' }, startHandler);
 
 // campaignStatus({ cardId }) -> { run, counts, rows, box } for the progress table.
 exports.campaignStatus = onCall({ timeoutSeconds: 30, memory: '256MiB' }, async (req) => {
@@ -238,21 +244,22 @@ exports.campaignStatus = onCall({ timeoutSeconds: 30, memory: '256MiB' }, async 
 });
 
 // campaignStop({ cardId }) -> { stopped }. Nothing more goes out; letters already sent stay as they are.
-exports.campaignStop = onCall({ timeoutSeconds: 60, memory: '256MiB' }, async (req) => {
+const stopHandler = async (req) => {
   const { d } = await cardGuard(req);
   const snap = await sendsOf(d.cardId), live = snap.docs.filter((x) => ['active', 'queued'].includes(x.data().status)), now = Date.now();
   for (let i = 0; i < live.length; i += 400) { const batch = db().batch(); // People who already got a letter may still answer: their reply check stays on.
     live.slice(i, i + 400).forEach((x) => batch.update(x.ref, Object.assign({ status: 'stopped', due: lib.FAR, endedAt: now }, (x.data().sentAt || []).length ? { chk: now } : { chk: lib.FAR }))); await batch.commit(); }
   await db().collection('runs').doc(d.cardId).set({ status: 'stopped', queue: [], updatedAt: now }, { merge: true });
   return { stopped: live.length };
-});
+};
+exports.campaignStop = onCall({ timeoutSeconds: 60 }, stopHandler);
 
 // convo({ cardId, op }) works with the conversation behind a contact card.
 //   op 'read'  -> { box, to, messages }        the letters exchanged with this person
 //   op 'draft' -> { body } or { need }         AI writes an answer to their last letter ({ engine, comment, draft, ui })
 //   op 'send'  -> { ok, at }                   sends { body } as an answer in the same thread, from the same mailbox
 // Only the owner of the mailbox (or the super admin) can read and answer: it is their correspondence.
-exports.convo = onCall({ secrets: [ANTHROPIC_API_KEY, OPENAI_API_KEY], timeoutSeconds: 120, memory: '256MiB' }, async (req) => {
+const convoHandler = async (req) => {
   const { uid, d, card, superAdmin, user } = await cardGuard(req);
   if (!['read', 'draft', 'send'].includes(d.op)) throw new HttpsError('invalid-argument', 'Unknown request.');
   const to = String((card.f || {}).email || '').trim().toLowerCase();
@@ -303,10 +310,17 @@ exports.convo = onCall({ secrets: [ANTHROPIC_API_KEY, OPENAI_API_KEY], timeoutSe
   // From now on the server watches for their next letter and raises the flag on the card.
   await db().collection('convos').doc(d.cardId).set({ cid: d.cardId, box: m.box, to, since: now, due: now + 10 * 60000, until: now + 30 * 86400000 });
   return { ok: true, at: now, mail: { box: m.box, threads, since: m.since || now } };
-});
+};
+exports.convo = onCall({ secrets: [ANTHROPIC_API_KEY, OPENAI_API_KEY], timeoutSeconds: 120, memory: '256MiB' }, convoHandler);
 
 // A reply turns the recipient into a contact card on the board, in the Replied column, linked to its campaign.
 async function replyCard(d, run, ref, kind) {
+  if (run.kind === 'contact') { // the person already has a card: it moves to "replied" and asks for an answer
+    const cref = db().collection('cards').doc(d.cid), c = (await cref.get()).data(); if (!c) return;
+    await cref.update({ awaiting: true, stage: ['new', 'contacted'].includes(c.stage) ? 'replied' : c.stage, next: { text: 'Answer the reply', date: new Date().toISOString().slice(0, 10) }, replyKind: kind || 'human',
+      tags: (c.tags || []).filter((x) => x !== 'auto-reply').concat(kind === 'auto' ? ['auto-reply'] : []), mail: { box: run.from, threads: (d.threads || []).concat(d.threadId || []).filter((x, i, a) => x && a.indexOf(x) === i), since: (d.sentAt || [])[0] || Date.now() } });
+    await ref.update({ card: d.cid }); return;
+  }
   const id = 'k' + ref.id.replace(/[^a-zA-Z0-9]/g, '').slice(-14) + Date.now().toString(36);
   await db().collection('cards').doc(id).set({ id, vid: run.vid, owner: run.owner, acl: run.acl || [], ord: Date.now(), type: 'contact', stage: 'replied', title: d.name || d.company || d.to, vec: run.cardVec || {}, parent: d.cid,
     f: { jobTitle: d.jobTitle || '', company: d.company || '', email: d.to, phone: '', linkedin: '' }, next: { text: 'Answer the reply', date: new Date().toISOString().slice(0, 10) }, awaiting: true,
@@ -330,6 +344,8 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
   const stillWanted = async (job) => {
     const cid = job.d.cid; if (!(cid in alive)) alive[cid] = (await db().collection('cards').doc(cid).get()).exists;
     if (!alive[cid]) return 'no card';
+    if (job.run.kind === 'contact') { const c = (await db().collection('cards').doc(cid).get()).data() || {}, who = job.run.owner || ''; if (!(who in bans)) bans[who] = await forbiddenFor(who);
+      return c.blocked ? 'This contact is blocked.' : String((c.f || {}).email || '').trim().toLowerCase() !== String(job.d.to).toLowerCase() ? 'The email on the card was changed.' : isForbidden(bans[who], job.d.to) ? 'On the forbidden list.' : ''; }
     const lead = await db().collection('leads').doc(String(job.d.lead || '-')).get();
     if (!lead.exists) return 'Removed from the campaign list.';
     if (lead.data().off || lead.data().blocked) return 'Left out of the campaign.';
@@ -463,6 +479,7 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
       // The letter is out. Saving that fact must not fail quietly, or the same letter would go again.
       for (let n = 0; ; n++) { try { await job.doc.ref.update(out); break; } catch (e) { if (n >= 3) { console.error('sent but not recorded', job.doc.id, e.message); break; } await new Promise((r) => setTimeout(r, 400 * (n + 1))); } }
       note.boxes[boxMail] = `sent letter ${job.d.i + 1} to ${job.d.to}`;
+      if (job.run.kind === 'contact') await db().collection('cards').doc(job.d.cid).update(Object.assign({ mail: { box: job.run.from, threads: out.threads || [], since: (out.sentAt || [now])[0] } }, first ? { stage: 'contacted' } : {})).catch(() => {});
       if (first && job.d.dom) doms[job.d.dom] = (doms[job.d.dom] || 0) + 1;
       await msRef.set({ firstAt: ms.firstAt || now, lastAt: now, nextAt: now + lib.gapFor(rules, Math.random()), day: today, newToday: newToday + (first ? 1 : 0), doms: JSON.stringify(doms) }, { merge: true });
     } catch (e) {
@@ -487,7 +504,7 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
 // ---------- The bridge to Claude ----------
 // bridge is the address Claude connects to as a custom connector (MCP). It is public on the network, like any web
 // address, but answers only to a personal VECTOR key. bridgeKey lets the super admin create, see and switch off that key.
-const bridge = require('./bridge')({ db, lib, fetchFn: (...a) => fetch(...a) });
+const bridge = require('./bridge')({ db, lib, fetchFn: (...a) => fetch(...a), calls: { start: startHandler, stop: stopHandler, convo: convoHandler, countUse } });
 exports.bridge = onRequest({ timeoutSeconds: 120, memory: '512MiB', invoker: 'public', maxInstances: 5 }, (req, res) => bridge.handle(req, res).catch((e) => { console.error('bridge crashed', e.message); if (!res.headersSent) res.status(500).json({ jsonrpc: '2.0', id: null, error: { code: -32603, message: 'Internal error.' } }); }));
 
 exports.bridgeKey = onCall({}, async (req) => {

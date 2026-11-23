@@ -301,3 +301,14 @@ ownership, letter fields, a contact card per email per board. Letters are saved 
 the exact text. Every write is logged with what was asked (`bridgelog`). Still to build in part 2b: drafting a letter
 and checking recipients against the criterion with VECTOR's own AI from the chat. Part 3: first letter from a contact
 card and launch after "Поїхали".
+
+Part 3 built 23 Nov 2026. A contact card sends its own chain (one person, variant A, the same sending rules): button
+"Send the chain" on the Letters tab, or through the bridge. A reply moves the same card to Replied and raises "Reply
+waiting"; no second card. Bridge tools: find_correspondence and read_correspondence (the person's own mailboxes),
+launch_check (what would go out and what stops it), start_sending and send_answer (both need the person's go-ahead
+words; marked as irreversible so that Claude asks permission), stop_sending. A launch through the bridge runs the same
+server function as the button, with the same checks, at most 20 a day. The server cannot see the chat: the guarantee
+of "only after Поїхали" is the permission prompt in Claude ("Always ask" on the two sending tools) plus Claude's
+instructions; every launch is logged with the quoted words.
+Still open: part 2b (drafting and criterion check by VECTOR's own AI from the chat), operators' own keys, statistics
+and journal, company card, weekly review.

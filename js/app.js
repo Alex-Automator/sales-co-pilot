@@ -539,7 +539,10 @@
     const seq = seqOf(c), own = c.reply != null ? c.reply : '', busy = ui.cvBusy;
     const msgs = (cv.messages || []).map((m) => `<div class="cvm ${m.me ? 'me' : ''}"><small>${m.me ? t('cvMe') : esc(String(m.from).replace(/<.*>/, '').replace(/"/g, '').trim() || cv.to)} · ${when(m.at)}${m.subject ? ' · ' + esc(m.subject) : ''}</small><pre>${esc(m.text || '')}</pre></div>`).join('') || `<p class="sub">${t('cvEmpty')}</p>`;
     const need = ui.cvNeed && ui.cvNeed.cid === c.id ? `<div class="revbox"><b>${t('needTitle')}</b><ul>${ui.cvNeed.list.map((q) => `<li>${esc(q)}</li>`).join('')}</ul><small>${t('cvNeedNote')}</small></div>` : '';
-    return `<div class="seqhead"><span class="sub small">${t('cvWith')} ${esc(cv.to)} · ${t('fromMailbox')} ${esc(cv.box)}</span><button class="link small" data-act="cvRefresh">${t('runRefresh')}</button></div>
+    const rn = ui.run && ui.run.cid === c.id && ui.run.run && ui.run.run.status === 'active' ? ui.run : null;
+    if (!(ui.run && ui.run.cid === c.id) && !c.parent) setTimeout(() => { if (ui.open === c.id && !(ui.run && ui.run.cid === c.id)) runPoll(c.id); }, 0);
+    const pending = rn && rn.nextDue > rn.now ? `<p class="sub small warnc">${t('soloNext')} ${time(rn.nextDue)}. <button class="link small" data-act="runStop">${ui.stopArm ? t('stopSure') : t('soloStop')}</button></p>` : '';
+    return `${pending}<div class="seqhead"><span class="sub small">${t('cvWith')} ${esc(cv.to)} · ${t('fromMailbox')} ${esc(cv.box)}</span><button class="link small" data-act="cvRefresh">${t('runRefresh')}</button></div>
       <div class="cvlist">${msgs}</div>
       <div class="step"><div class="bh">${t('cvYour')}</div>
         <textarea class="in" rows="7" data-cvreply placeholder="${t('cvPh')}">${esc(own)}</textarea>
@@ -547,6 +550,15 @@
           <span class="grow"></span>${ui.cvSent === c.id ? `<span class="sub small okc">${t('cvSent')}</span>` : ''}<button class="btn sm ${ui.cvArm ? 'danger' : ''}" data-act="cvSend" ${busy || !String(own).trim() ? 'disabled' : ''}>${busy === 'send' ? t('aiBusy') : ui.cvArm ? t('cvSendSure') : t('cvSend')}</button></div>
         <input class="in" data-cvnote value="${esc(ui.cvNote || '')}" placeholder="${t('cvNotePh')}">${need}
         <p class="sub small">${t('cvHint')}</p></div>`;
+  }
+  // One contact: the chain above goes to this person only, by the same sending rules as a campaign.
+  function vSolo(c) {
+    if (c.type !== 'contact' || !CLOUD) return '';
+    const seq = seqOf(c), lets = seq.steps, okL = lets.filter((x) => x.status === 'approved').length, has = !!String(c.f.email || '').trim(), known = !!(ui.run && ui.run.cid === c.id), busy = known && ui.run.busy;
+    if (!known) setTimeout(() => { if (ui.open === c.id && !(ui.run && ui.run.cid === c.id)) runPoll(c.id); }, 0);
+    const ready = has && lets.length > 0 && okL === lets.length && !blockedWhy(c), running = known && ui.run.run && ui.run.run.status === 'active';
+    return `<div class="sitebox"><div class="bh">${t('soloTitle')}</div><p class="sub small">${!has ? t('soloNoMail') : okL < lets.length || !lets.length ? t('soloApprove') : t('soloReady').replace('{e}', esc(c.f.email))}</p>${vRun(c)}
+      <div class="acts"><span class="grow"></span><button class="btn ${ui.runArm ? 'danger' : ''}" data-act="runStart" ${ready && !busy && known && !running ? '' : 'disabled'}>${!known ? t('runChecking') : busy ? t('aiBusy') : ui.runArm ? t('soloSure').replace('{e}', esc(c.f.email)) : t('soloStart')}</button></div></div>`;
   }
   function vSequence(c) {
     if (hasConvo(c)) return vConvo(c);
@@ -592,7 +604,7 @@
     const started = camp && (c.runAt || c.stage !== 'new' || (ui.run && ui.run.cid === c.id && ui.run.run)), lateNote = started ? `<div class="revbox"><b>${t('lateTitle')}</b><small>${t('lateNote')}</small></div>` : '';
     return `<div class="seqhead">${camp ? `<span class="sub small">${t('willGet')}: ${will}</span><button class="btn ghost sm" data-act="seqAuto" ${CLOUD && !ui.busy ? '' : 'disabled'} title="${CLOUD ? t('seqAutoHint') : t('aiDemoOnly')}">${ui.auto ? t('aiBusy') + ' ' + ui.auto : t('seqAuto')}</button>`
       : `<label class="fromf"><span>${t('fromMailbox')}</span>${from}</label>`}<span class="ty">${done} / ${list.length} ${t('approvedOf')}</span></div>
-      ${lateNote}${briefHint}${head2}${vtabs}${steps}${list.length < 5 ? `<button class="add" data-act="seqAdd">+ ${t('letter')} ${k}${list.length + 1} · ${t('addFollow')}</button>` : ''}<p class="sub small">${t('chainNote')} ${t('seqNote')}</p>
+      ${lateNote}${briefHint}${head2}${vtabs}${steps}${list.length < 5 ? `<button class="add" data-act="seqAdd">+ ${t('letter')} ${k}${list.length + 1} · ${t('addFollow')}</button>` : ''}<p class="sub small">${t('chainNote')} ${t('seqNote')}</p>${camp ? '' : vSolo(c)}
       ${camp ? `<div class="acts"><span class="sub small">${vs.map((x) => { const st = x === 'A' ? seq.steps : seq.alt[x].steps, ok = st.filter((y) => y.status === 'approved').length; return `${t('variant')} ${x}: ${ok} / ${st.length} ${t('approvedOf')}`; }).join(' · ')}</span><span class="grow"></span><button class="btn sm" data-act="ctab" data-v="send">${t('tabSend')} →</button></div>` : ''}`;
   }
 

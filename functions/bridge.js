@@ -4,7 +4,7 @@
 const crypto = require('crypto');
 
 const VERSIONS = ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
-const SERVER = { name: 'vector-sales-co-pilot', title: 'VECTOR — Sales-co-pilot', version: '0.5.0' };
+const SERVER = { name: 'vector-sales-co-pilot', title: 'VECTOR — Sales-co-pilot', version: '0.6.0' };
 const hashKey = (key) => crypto.createHash('sha256').update(String(key)).digest('hex');
 const newKey = () => 'vk_' + crypto.randomBytes(32).toString('base64url');
 
@@ -30,6 +30,8 @@ Preparing things (you can create and set up everything the person could click to
 - From a business card photo or a few words: read what is there, ask only for what is missing and matters (the email above all), then create the contact card in the right vector.
 - Letters: write them yourself from the topic settings, the library links of the vector (get_vector shows them) and what the person told you, or improve what is already in the card. Show the exact text to the person. Save letters as drafts; mark a letter approved only after the person approved that exact text in this conversation.
 - In campaign letters use only these fields: {{firstName}} {{lastName}} {{company}} {{jobTitle}} {{city}} {{project}} {{myName}}. A phrase that depends on a field some recipients lack goes in [[double brackets]]: it is dropped for people without it. Do not write a signature: the mailbox signature is added automatically. A letter to one contact needs no fields at all.
+- Launching: when everything is prepared, call launch_check, tell the person in a few lines what will go out (to whom, how many, from which mailbox, the first letter) and ask "Поїхали?". Call start_sending or send_answer only after they answer with a clear go-ahead in this conversation, and pass their words. Silence, "looks good" about a text, or an earlier go-ahead for something else is not a go-ahead. One go-ahead covers one launch.
+- If the person says to stop, stop first (stop_sending) and discuss afterwards.
 - You cannot change sending rules, access rights, the forbidden list or mailboxes, and you cannot delete anything. If the person asks for that, say they do it in VECTOR themselves.`;
 
 // ---------- Tool definitions ----------
@@ -103,13 +105,28 @@ TOOLS.push(
     inputSchema: obj({ card_id: str('Id of the campaign or contact card.'), language: str('Language of sending, two letters, for example en.'), interval_unit: { type: 'string', enum: ['days', 'hours', 'minutes'], description: 'Unit of the day numbers. Days for real campaigns; minutes only for tests.' },
       variants: { type: 'array', minItems: 1, maxItems: 3, items: obj({ variant: { type: 'string', enum: ['A', 'B', 'C'] }, for_job_titles: str('Optional: job title words this variant is for, comma separated.'), letters: { type: 'array', minItems: 1, maxItems: 6, items: LETTER } }, ['variant', 'letters']) }, remove_variants: { type: 'array', items: { type: 'string', enum: ['B', 'C'] }, description: 'Variants to remove.' } }, ['card_id', 'variants']) },
 );
+const GO = str('The person\'s own words of go-ahead from this conversation, quoted exactly (for example "Поїхали"). Required. Never fill this in yourself: if the person has not clearly said to launch, do not call this tool — ask them.');
+TOOLS.push(
+  { name: 'launch_check', title: 'Is the card ready to launch?', read: true,
+    description: 'Checks a campaign or a contact card before a launch and returns what would go out: from which mailbox, to how many people (and who, for a short list), the letters with their approval state, the opt-out line, and every problem that would stop the launch (letters not approved, no mailbox, people with an empty field the letter uses, nobody left to write to). Show this summary to the person and ask for their go-ahead.',
+    inputSchema: obj({ card_id: str('Id of the campaign or contact card.') }, ['card_id']) },
+  { name: 'start_sending', title: 'LAUNCH: start sending letters', send: true,
+    description: 'Starts sending the approved letters of a campaign or a contact card to real people. This cannot be taken back. Call it only when (1) launch_check shows no problems, (2) you showed the person what will go out, and (3) the person then said clearly, in this conversation, to launch ("Поїхали" or equally clear words). After the start the VECTOR server sends by the sending rules: daily limits, pauses, the recipient\'s working hours; reminders go later unless the person replied. Also continues a campaign that was paused, and queues people added since the last start.',
+    inputSchema: obj({ card_id: str('Id of the campaign or contact card.'), go_ahead: GO }, ['card_id', 'go_ahead']) },
+  { name: 'stop_sending', title: 'Stop sending',
+    description: 'Stops a running campaign or the chain of a contact: no more first letters and no more reminders. Letters already sent stay sent; replies to them are still noticed. Use it at once when the person asks to stop.',
+    inputSchema: obj({ card_id: str('Id of the campaign or contact card.') }, ['card_id']) },
+  { name: 'send_answer', title: 'SEND: answer a contact', send: true,
+    description: 'Sends an answer to a contact in the existing conversation (the same mailbox, the same thread, the mailbox signature is added). It goes at once and cannot be taken back. Call it only after the person approved this exact text in this conversation and said to send it. Read the conversation first (get_conversation). No {{fields}}: write to the person in plain words.',
+    inputSchema: obj({ card_id: str('Id of the contact card.'), body: str('The text of the answer, without a signature.'), go_ahead: GO }, ['card_id', 'body', 'go_ahead']) },
+);
 const publicTool = (t) => ({ name: t.name, title: t.title, description: t.description, inputSchema: t.inputSchema,
-  annotations: { title: t.title, readOnlyHint: !!t.read, destructiveHint: false, idempotentHint: !!t.read, openWorldHint: !!t.send } });
+  annotations: { title: t.title, readOnlyHint: !!t.read, destructiveHint: !!t.send, idempotentHint: !!t.read, openWorldHint: !!t.send } });
 
 class ToolError extends Error {}
 
 // ---------- The server ----------
-module.exports = function makeBridge({ db, lib, fetchFn }) {
+module.exports = function makeBridge({ db, lib, fetchFn, calls }) {
   const col = (n) => db().collection(n);
   const one = async (n, id) => { const s = await col(n).doc(String(id || '-')).get(); return s.exists ? Object.assign({ id: s.id }, s.data()) : null; };
   const clip = (x, n) => { const s = String(x == null ? '' : x); return s.length > n ? s.slice(0, n) + '…' : s; };
@@ -391,6 +408,55 @@ module.exports = function makeBridge({ db, lib, fetchFn }) {
       await col('cards').doc(c.id).update({ seq });
       const run = await col('runs').doc(c.id).get(); if (run.exists) warn.push('This campaign has already started: people already in the run keep the letters as they were; the new text applies to people added later.');
       return drop({ saved: true, letters: lettersOf(Object.assign({}, c, { seq })), notes: warn });
+    },
+  });
+
+  // ---------- Launching: only with the person's go-ahead ----------
+  // The same server functions the program's own buttons call, with the same checks. Their coded refusals become sentences Claude can act on.
+  const WHY = [[/RULE_PRIMARY\s*(\S*)/, (m) => `The sending rules say cold letters go only from a secondary mailbox, and ${m[1]} is the main one. The person picks another mailbox or changes the rule in VECTOR.`],
+    [/EMPTY_FIELDS\s*(.*)/, (m) => 'Some people have an empty field the letters use: ' + m[1].split(',').map((x) => { const [l, f, n] = x.split('|'); return `letter ${l} needs {{${f}}}, empty for ${n}`; }).join('; ') + '. Fill the field in, remove it from the letter, or put the phrase in [[double brackets]].'],
+    [/MAIL_ACCESS\s*(.*)/, (m) => 'The server cannot send from this mailbox: the Google Workspace admin has to allow it. ' + m[1]], [/MAIL_READ\s*(.*)/, (m) => 'The server cannot read this mailbox, so replies would stay unseen. The Google Workspace admin has to add the gmail.readonly scope. ' + m[1]],
+    [/NOBODY_LEFT\s*(\d+)\|(\d+)/, (m) => `Nobody is left to write to: ${m[1]} on the forbidden list, ${m[2]} repeated addresses.`], [/CONVO_VARS/, () => 'The answer still contains {{fields}} or [[brackets]]. Write the text as the person should read it.'],
+    [/CONVO_OWNER\s*(\S*)/, (m) => `This conversation runs from ${m[1]}, a mailbox of another person.`], [/NO_CONVO/, () => 'There is no conversation with this contact yet: nothing to answer. To write first, save a letter with set_letters and launch it.']];
+  const via = async (fn, me, data) => { try { return await fn({ auth: { uid: me.uid, token: { email: me.email } }, data }); } catch (e) { const msg = String(e.message || e), hit = WHY.find((w) => w[0].test(msg)); throw new ToolError(hit ? hit[1](msg.match(hit[0])) : msg.slice(0, 400)); } };
+  const goAhead = (a) => { const g = txt(a.go_ahead, 200); if (g.length < 2) throw new ToolError('Not launched: the person has not given a go-ahead. Show them what will go out and ask.'); return g; };
+  const zoneOf = async (me) => { const u = await one('users', me.uid); if (u && u.tz) return u.tz; const r = await col('runs').where('owner', '==', me.uid).get(); return (r.docs.map((x) => x.data()).sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0))[0] || {}).tz || 'UTC'; };
+
+  Object.assign(handlers, {
+    async launch_check(me, a) {
+      const c = await cardOf(me, a.card_id), solo = c.type === 'contact'; if (c.type !== 'campaign' && !solo) throw new ToolError('Only a campaign or a contact card sends letters.');
+      const v = await one('vectors', c.vid), co = v ? await one('params', v.company) : null, boxes = ((((co || {}).s || {}).mailboxes) || []).filter((b) => me.superAdmin || b.owner === me.uid), seq = c.seq || {}, problems = [];
+      const box = boxes.find((b) => b.email === seq.from) || boxes.find((b) => b.primary) || boxes[0];
+      if (!box) problems.push('No mailbox: the person adds one in the company settings, then choose it with update_card.'); else if (!seq.from) problems.push(`No mailbox chosen on the card; ${box.email} would be used. Set it with update_card to be explicit.`);
+      const sh = await col('workspace').doc('shared').get(), rules = Object.assign({ coldSecondary: true }, (sh.exists && sh.data().send) || {});
+      if (box && rules.coldSecondary && box.primary) problems.push(`The sending rules allow cold letters only from a secondary mailbox, and ${box.email} is the main one.`);
+      const letters = lettersOf(solo ? Object.assign({}, c, { seq: Object.assign({}, seq, { alt: {} }) }) : c), all = letters.variants.reduce((x, y) => x.concat(y.letters), []);
+      if (!all.length) problems.push('There are no letters yet (set_letters).'); const draft = all.filter((l) => !l.approved).map((l) => l.letter); if (draft.length) problems.push(`Not approved by the person yet: ${draft.join(', ')}. Show the text, get their approval, then save it with approved: true.`);
+      let people = [];
+      if (solo) { const e = String((c.f || {}).email || '').trim(); if (!e) problems.push('The contact has no email address.'); else people = [{ id: c.id, f: Object.assign({ firstName: String(c.title || '').split(/\s+/)[0] }, c.f) }]; }
+      else people = (await col('leads').where('cid', '==', c.id).get()).docs.map((x) => x.data()).filter((l) => String((l.f || {}).email || '').trim() && !l.off && !l.blocked);
+      const ban = await banned(me.uid), forbidden = people.filter((l) => isBanned(ban, String(l.f.email).toLowerCase())); people = people.filter((l) => !forbidden.includes(l));
+      const sent = {}; (await col('sends').where('cid', '==', c.id).get()).docs.forEach((x) => { if (x.data().status !== 'queued') sent[String(x.data().to).toLowerCase()] = 1; });
+      const fresh = people.filter((l) => !sent[String(l.f.email).toLowerCase()]); if (!fresh.length) problems.push(people.length ? 'Everyone on the list has already been written to.' : 'There is nobody to write to.');
+      const holes = {}; all.forEach((l) => fresh.forEach((p) => lib.emptyVars(l.subject + '\n' + l.body, Object.assign({ myName: 'x', project: (p.chk || {}).proj || '' }, p.f)).forEach((f) => { const k = `${l.letter} needs {{${f}}}`; holes[k] = (holes[k] || 0) + 1; })));
+      Object.keys(holes).forEach((k) => problems.push(`${k}, empty for ${holes[k]} of ${fresh.length}. Fill it in, drop it, or put the phrase in [[double brackets]].`));
+      const run = await col('runs').doc(c.id).get();
+      return Object.assign({ ready: !problems.length }, drop({ problems, card: c.title, kind: solo ? 'one contact' : 'campaign', mailbox: box ? box.email : '', sender_name: box ? box.name || me.name : '', would_write_to: fresh.length, already_written_to: people.length - fresh.length, skipped_forbidden: forbidden.length,
+        people: fresh.slice(0, 15).map((l) => drop({ name: [l.f.firstName, l.f.lastName].filter(Boolean).join(' '), email: l.f.email, company: l.f.company })), opt_out_line: (c.optOut == null ? !!((v || {}).opt || {}).on : !!c.optOut) ? ((v || {}).opt || {}).text || 'on' : 'off',
+        letters, already_running: run.exists && run.data().status === 'active', paused: run.exists && run.data().paused ? 'paused: too many bounced letters; a start continues it' : '', sending_rules: 'daily limits, pauses between letters, the recipient\'s working hours; set by the person in VECTOR' }));
+    },
+    async start_sending(me, a) {
+      const words = goAhead(a), c = await cardOf(me, a.card_id); await calls.countUse(me.uid, 'bl', 20);
+      const r = await via(calls.start, me, { cardId: c.id, tz: await zoneOf(me) });
+      if (c.stage === 'new') await col('cards').doc(c.id).update({ stage: 'contacted', runAt: Date.now() }).catch(() => {});
+      return drop({ launched: true, go_ahead: words, queued_now: r.queued, already_in_the_run: r.already, continued_after_pause: !!r.resumed, retried_after_errors: r.revived, skipped_forbidden: r.forbidden, skipped_repeated: r.dupes, mailbox: r.from,
+        what_happens_next: 'The server sends by the sending rules, not all at once. Use campaign_status to follow it. Replies appear as cards in the Replied column.' });
+    },
+    async stop_sending(me, a) { const c = await cardOf(me, a.card_id), r = await via(calls.stop, me, { cardId: c.id }); return { stopped: true, chains_stopped: r.stopped || 0, note: 'Letters already sent stay sent; replies to them are still noticed.' }; },
+    async send_answer(me, a) {
+      const words = goAhead(a), c = await cardOf(me, a.card_id), body = txt(a.body, 8000); if (!body) throw new ToolError('The answer is empty.');
+      const r = await via(calls.convo, me, { cardId: c.id, op: 'send', body });
+      return { sent: true, go_ahead: words, at: new Date(r.at).toISOString().slice(0, 16) + 'Z', note: 'The card no longer waits for an answer. When the person writes again, it will.' };
     },
   });
 
