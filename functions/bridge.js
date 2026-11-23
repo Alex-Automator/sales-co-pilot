@@ -4,7 +4,7 @@
 const crypto = require('crypto');
 
 const VERSIONS = ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
-const SERVER = { name: 'vector-sales-co-pilot', title: 'VECTOR — Sales-co-pilot', version: '0.6.0' };
+const SERVER = { name: 'vector-sales-co-pilot', title: 'VECTOR — Sales-co-pilot', version: '0.7.0' };
 const hashKey = (key) => crypto.createHash('sha256').update(String(key)).digest('hex');
 const newKey = () => 'vk_' + crypto.randomBytes(32).toString('base64url');
 
@@ -25,6 +25,7 @@ How to work
 - Nothing is launched without the person's explicit go-ahead in this conversation ("Поїхали" or equally clear words). Preparing is fine; launching is their decision.
 
 Preparing things (you can create and set up everything the person could click together before a launch)
+- Which company writes: the person owns several companies. Choose by the company profiles in vector_overview (what each does, its clients, when to write from it) and by its directions, never by the name alone. When two companies could fit, name both with the reason for each and ask. When a profile is empty, say so and offer to draft it: read the company's website if you can, ask the person where the boundary with their other companies lies, show the draft, and save it with set_company_profile after they agree.
 - Before creating anything, look for what already exists: find for a person or company, vector_overview for a vector that fits the kind of client and the job title. Reuse a fitting vector; when several fit or none does, say what you see and ask, or propose a new one and name its four parameters before you create it.
 - A topic's hook is the reason to write. Agree it with the person in words before you set or change it, and tell them when the topic is used by other vectors, because the change will reach them too.
 - From a business card photo or a few words: read what is there, ask only for what is missing and matters (the email above all), then create the contact card in the right vector.
@@ -76,6 +77,9 @@ TOOLS.push(
   { name: 'read_correspondence', title: 'Read one past conversation', read: true,
     description: 'The full text of one conversation found by find_correspondence: every letter with sender, date and text, without quoted tails.',
     inputSchema: obj({ mailbox: str('The mailbox, as returned by find_correspondence.'), thread: str('The thread id, as returned by find_correspondence.') }, ['mailbox', 'thread']) },
+  { name: 'set_company_profile', title: 'Write the profile of a company',
+    description: 'Saves what one of the person\'s companies does, so that you and VECTOR\'s own AI know which company should write to a client and what to say about it: about (what it does and sells), clients (who buys), when_to_use (when to write from this company rather than from the person\'s other companies — the boundary between them), not_doing, proof (cases, numbers, names). You may draft it from the company\'s website and what the person told you, but the boundary between their companies only they know: show the draft, let them correct it, save after they agree. Only the fields you pass are changed.',
+    inputSchema: obj({ company_id: str('Id of the company.'), about: str('What the company does and sells.'), clients: str('Who its clients are.'), when_to_use: str('When to write from this company and not from the others.'), not_doing: str('What it does not do.'), proof: str('Cases, numbers, names that can be mentioned.') }, ['company_id']) },
   { name: 'create_parameter', title: 'Create a direction, audience or topic',
     description: 'Creates a new direction (what is sold; belongs to one company), audience (who decides at the client) or topic (the reason to write). Check vector_overview first so that you do not create a second copy of something that exists. Companies are created by the person in VECTOR, not here. Settings — direction: desc, criteria (list). Audience: role (decision, influence or user), tone (formal, neutral or informal), regions, language, pains, notes. Topic: hook, offer, tones (list of: direct, friendly, expert, formal, brief, curious), cta, proof, avoid, sample, keywords, crit (what a client company must have or do to be written to), tag, terms (words to look for on a site, comma separated).',
     inputSchema: obj({ kind: { type: 'string', enum: ['direction', 'audience', 'topic'] }, name: str('Short name shown on the screen.'), company_id: str('For a direction: the company it belongs to.'), settings: { type: 'object', description: 'Settings as listed in the description.', additionalProperties: true } }, ['kind', 'name']) },
@@ -184,7 +188,9 @@ module.exports = function makeBridge({ db, lib, fetchFn, calls }) {
       const [params, vectors, cards, runs] = await Promise.all([mine(me, 'params'), mine(me, 'vectors'), mine(me, 'cards'), col('runs').where('status', '==', 'active').get()]);
       const byId = {}; params.forEach((p) => { byId[p.id] = p; });
       const running = {}; runs.docs.forEach((r) => { running[r.id] = r.data(); });
-      const zone = (z) => params.filter((p) => p.zone === z).map((p) => drop({ id: p.id, name: p.name, hook: z === 'topic' ? clip((p.s || {}).hook, 160) : '', mailboxes: z === 'company' ? (((p.s || {}).mailboxes) || []).map((b) => b.email) : '' }));
+      const profile = (s) => { const o = drop({ does: clip(s.about, 500), clients: clip(s.clients, 300), write_from_it_when: clip(s.whenUse, 400), does_not_do: clip(s.notDo, 300), proof: clip(s.proof, 300) }); return Object.keys(o).length ? o : 'EMPTY: nothing is written about what this company does. Do not guess from the name: ask the person, or offer to draft the profile (set_company_profile).'; };
+      const zone = (z) => params.filter((p) => p.zone === z).map((p) => drop({ id: p.id, name: p.name, company_id: z === 'direction' ? p.company : '', about: z === 'direction' ? clip((p.s || {}).desc, 300) : '', good_fit_when: z === 'direction' ? (p.s || {}).criteria : '', hook: z === 'topic' ? clip((p.s || {}).hook, 160) : '',
+        website: z === 'company' ? (p.s || {}).website : '', profile: z === 'company' ? profile(p.s || {}) : '', mailboxes: z === 'company' ? (((p.s || {}).mailboxes) || []).map((b) => b.email) : '' }));
       const vs = vectors.map((v) => { const mineCards = cards.filter((c) => c.vid === v.id), stages = {}; mineCards.forEach((c) => { stages[c.stage] = (stages[c.stage] || 0) + 1; });
         return drop({ id: v.id, company: (byId[v.company] || {}).name, direction: (byId[v.direction] || {}).name, audience: (byId[v.audience] || {}).name, topic: (byId[v.topic] || {}).name,
           parameter_ids: { company: v.company, direction: v.direction, audience: v.audience, topic: v.topic }, cards_by_stage: stages,
@@ -302,6 +308,15 @@ module.exports = function makeBridge({ db, lib, fetchFn, calls }) {
       let msgs; try { msgs = await lib.mailThread(fetchFn, {}, box.email, a.thread); } catch (e) { throw new ToolError('The conversation could not be read: ' + clip(e.message, 160)); }
       if (!msgs.length) throw new ToolError('This conversation was not found in the mailbox.');
       return { mailbox: box.email, subject: msgs[0].subject, letters: msgs.slice(-25).map((m) => ({ from: m.me ? 'us' : clip(m.from, 120), to: clip(m.to, 200), at: new Date(m.at).toISOString().slice(0, 16) + 'Z', text: clip(m.text, 3500) })) };
+    },
+    async set_company_profile(me, a) {
+      const co = await one('params', a.company_id); need(co && co.zone === 'company' && sees(me, co) ? co : null, 'The company');
+      if (!me.superAdmin && !(co.managers || []).includes(me.uid)) throw new ToolError('Only the super admin or an admin of this company changes its profile.');
+      const map = { about: ['about', 3000], clients: ['clients', 2000], when_to_use: ['whenUse', 2000], not_doing: ['notDo', 2000], proof: ['proof', 3000] }, up = {}, done = [];
+      Object.keys(map).forEach((k) => { if (a[k] != null) { up['s.' + map[k][0]] = txt(a[k], map[k][1]); done.push(k); } });
+      if (!done.length) throw new ToolError('Nothing to save: pass at least one of about, clients, when_to_use, not_doing, proof.');
+      await col('params').doc(co.id).update(up);
+      return { saved: done, company: co.name };
     },
     async create_parameter(me, a) {
       const kind = a.kind, name = txt(a.name, 120); if (!SETTINGS[kind]) throw new ToolError('kind must be direction, audience or topic. Companies are created by the person in VECTOR.'); if (!name) throw new ToolError('Give the parameter a name.');

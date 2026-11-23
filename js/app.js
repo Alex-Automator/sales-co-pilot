@@ -672,7 +672,10 @@
           ${m.sigHtml ? `<iframe class="sigprev" sandbox srcdoc="${esc('<body style="margin:8px;background:#fff">' + m.sigHtml + '</body>')}"></iframe>` : ''}</details>
         ${m.sig ? '' : `<button class="link small" data-act="mbSigPlain" data-i="${i}">${t('sigPlain')}</button>`}
         </div>`)).join('');
-      return sIn(it, 'website', t('website')) + `<div class="fl"><span>${t('mailboxes')}</span>${boxes}<input class="in" data-listadd="mailboxes" placeholder="${t('addMailbox')}"><p class="sub small">${t('sigHint')}</p></div>`;
+      // The profile is what AI reads to decide which company should write to a client, and what to say about it.
+      return sIn(it, 'website', t('website')) + `<div class="brief"><div class="bh">${t('coProfile')}</div><p class="sub small">${t('coProfileNote')}</p></div>`
+        + sIn(it, 'about', t('coAbout'), 1, t('ph_coAbout')) + sIn(it, 'clients', t('coClients'), 1, t('ph_coClients')) + sIn(it, 'whenUse', t('coWhen'), 1, t('ph_coWhen')) + sIn(it, 'notDo', t('coNot'), 1, t('ph_coNot')) + sIn(it, 'proof', t('coProof'), 1, t('ph_coProof'))
+        + `<div class="fl"><span>${t('mailboxes')}</span>${boxes}<input class="in" data-listadd="mailboxes" placeholder="${t('addMailbox')}"><p class="sub small">${t('sigHint')}</p></div>`;
     }
     if (zone === 'direction') {
       const cr = (it.s.criteria || []).map((c, i) => `<div class="lrow"><span class="num">${i + 1}</span><span class="lt">${esc(c)}</span><button class="link" data-act="crRemove" data-i="${i}">×</button></div>`).join('');

@@ -15,7 +15,8 @@ const TONES = {
 function brief(ctx) {
   const { company = {}, direction = {}, audience = {}, topic = {}, card = {} } = ctx;
   const s = (p) => p.s || {};
-  let out = 'SENDER COMPANY\n' + line('Name', company.name) + line('Website', s(company).website) + line('About', s(company).desc);
+  let out = 'SENDER COMPANY\n' + line('Name', company.name) + line('Website', s(company).website) + line('What it does and sells', s(company).about || s(company).desc) + line('Its clients', s(company).clients)
+    + line('Does not do', s(company).notDo) + line('Proof (cases, numbers)', s(company).proof);
   out += '\nSERVICE\n' + line('Name', direction.name) + line('About', s(direction).desc) + line('Good fit when', s(direction).criteria);
   out += '\nAUDIENCE\n' + line('Name', audience.name) + line('Job titles', s(audience).titles) + line('Seniority', (s(audience).seniority || []).join(', '))
     + line('Regions', s(audience).regions) + line('Their pains', s(audience).pains) + line('Notes', s(audience).notes);

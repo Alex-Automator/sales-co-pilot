@@ -312,3 +312,8 @@ of "only after Поїхали" is the permission prompt in Claude ("Always ask" 
 instructions; every launch is logged with the quoted words.
 Still open: part 2b (drafting and criterion check by VECTOR's own AI from the chat), operators' own keys, statistics
 and journal, company card, weekly review.
+
+Company profile (23 Nov 2026): a company's settings hold what AI needs to choose which of the person's companies
+writes to a client: about, clients, whenUse (the boundary with the other companies), notDo, proof. The overview of
+the bridge shows the profile of every company and calls an empty one out; set_company_profile saves a draft the
+person agreed to. VECTOR's own AI reads the same fields when it writes letters.
