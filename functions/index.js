@@ -150,7 +150,7 @@ async function cardGuard(req) {
 const forbiddenFor = async (uid) => { const g = await db().collection('guards').doc(String(uid || '-')).get(); return ((g.exists && g.data().list) || []).map((x) => String(x).trim().toLowerCase().replace(/^@/, '')).filter(Boolean); };
 const isForbidden = (list, email) => { const e = String(email || '').trim().toLowerCase(); return list.some((g) => e === g || e.endsWith('@' + g)); };
 const sendsOf = (cardId) => db().collection('sends').where('cid', '==', cardId).get();
-const rulesNow = async () => { const s = await db().collection('workspace').doc('shared').get(); return Object.assign({ start: 3, step: 2, cap: 10, gapMin: 10, gapMax: 20, from: 9, to: 17, workdays: true, jitter: true, coldSecondary: true, perDomain: 2, bounce: 3 }, (s.exists && s.data().send) || {}); };
+const rulesNow = async () => { const s = await db().collection('workspace').doc('shared').get(); return Object.assign({ start: 3, step: 2, cap: 10, gapMin: 10, gapMax: 20, from: 9, to: 17, workdays: true, coldSecondary: true, perDomain: 2, bounce: 3 }, (s.exists && s.data().send) || {}); };
 const inChunks = async (items, n, fn) => { for (let i = 0; i < items.length; i += n) await Promise.all(items.slice(i, i + n).map(fn)); };
 
 // campaignStart({ cardId, tz }) -> { queued, already, from }.

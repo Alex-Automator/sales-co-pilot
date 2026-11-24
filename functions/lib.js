@@ -561,7 +561,8 @@ function inWindow(rules, ms, tz, offMin) { const p = localParts(ms, tz); if (rul
 // ---------- Sending like a person, not like a timer ----------
 // All randomness comes through here, so that tests can replay a schedule.
 const chance = { rnd: () => Math.random() };
-const human = (rules) => rules.jitter !== false;
+// Always on: there is no switch for it. Only the tests ask for plain timing, to replay exact schedules.
+const human = () => !process.env.VECTOR_PLAIN_TIMING;
 // What a mailbox does today: when it starts (5-90 minutes after the hour the rules allow) and how many new letters it
 // writes (now and then one fewer than the limit, never more).
 function dayPlan(rules, firstAt, now) {
@@ -583,7 +584,7 @@ function reminderAt(rules, exact, tz) {
 }
 const sleep = (ms) => (process.env.VECTOR_NO_DELAY ? Promise.resolve() : new Promise((r) => setTimeout(r, ms)));
 const capFor = (rules, firstAt, now) => Math.max(1, Math.min(+rules.cap || 10, (+rules.start || 3) + (+rules.step || 0) * Math.floor(Math.max(0, now - (firstAt || now)) / (7 * 86400000))));
-const gapFor = (rules, rnd) => { const a = Math.max(1, +rules.gapMin || 10), b = Math.max(a, +rules.gapMax || a); return Math.round((rules.jitter === false ? a : a + (b - a) * rnd) * 60000); };
+const gapFor = (rules, rnd) => { const a = Math.max(1, +rules.gapMin || 10), b = Math.max(a, +rules.gapMax || a); return Math.round((human() ? a + (b - a) * rnd : a) * 60000); };
 
 // Replies are looked for on their own clock, not only when the next letter is due: a reminder may be days away.
 const CHECK_EVERY = 10 * 60000, CHECK_SLOW = 60 * 60000, CHECK_FAST_FOR = 3 * 86400000;

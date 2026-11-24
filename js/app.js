@@ -745,9 +745,9 @@
         ${row(t('sendStart'), num('start'))}${row(t('sendStep'), '+ ' + num('step'))}${row(t('sendCap'), num('cap'))}${row(t('sendGap'), num('gapMin') + ' – ' + num('gapMax'))}
         ${row(t('sendDomain'), num('perDomain'))}${row(t('sendBounce'), num('bounce') + ' %')}
         <div class="bh sp2">${t('sendWhen')}</div>
-        ${row(t('sendHours'), num('from') + ' – ' + num('to'))}${tg('workdays')}${tg('jitter')}
+        ${row(t('sendHours'), num('from') + ' – ' + num('to'))}${tg('workdays')}
         <div class="bh sp2">${t('sendHow')}</div>${tg('coldSecondary')}${tg('noTrack')}
-        <div class="bh sp2">${t('sendAlways')}</div>${lock('lockApprove')}${lock('lockReply')}${lock('lockBounce')}${lock('lockStop')}
+        <div class="bh sp2">${t('sendAlways')}</div>${lock('lockHuman')}${lock('lockApprove')}${lock('lockReply')}${lock('lockBounce')}${lock('lockStop')}
         <p class="sub small">${t('seqNote')}</p><div class="acts"><button class="btn sm" data-act="closeEdit">${t('close')}</button></div></div></div></div>`;
     }
     if (e.kind === 'profile') {

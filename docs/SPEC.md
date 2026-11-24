@@ -327,7 +327,7 @@ letters.
 The sender name is set through set_company_profile (company_id, mailbox, sender_name): a separate tool for it did not
 reach Claude's tool list, while changed parameters of existing tools do arrive in a new chat.
 
-Sending like a person (24 Nov 2026; switch "Send like a person" in the sending rules, on by default). The server runs
+Sending like a person (24 Nov 2026; always on, no switch; shown in the "Always on" list of the sending rules). The server runs
 every minute. For each mailbox and day it draws a plan: the day starts 5-90 minutes after the opening hour (in the
 recipient's time zone), and the number of new letters is the limit or, about three days in ten, one fewer. New letters
 are spread over the rest of the working day with uneven gaps (never shorter than the pause in the rules). Before each
