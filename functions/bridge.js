@@ -4,7 +4,7 @@
 const crypto = require('crypto');
 
 const VERSIONS = ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
-const SERVER = { name: 'vector-sales-co-pilot', title: 'VECTOR — Sales-co-pilot', version: '0.8.2' };
+const SERVER = { name: 'vector-sales-co-pilot', title: 'VECTOR — Sales-co-pilot', version: '0.9.0' };
 const hashKey = (key) => crypto.createHash('sha256').update(String(key)).digest('hex');
 const newKey = () => 'vk_' + crypto.randomBytes(32).toString('base64url');
 
@@ -32,7 +32,7 @@ const obj = (properties, required) => ({ type: 'object', properties, required: r
 const str = (description) => ({ type: 'string', description });
 const TOOLS = [
   { name: 'vector_overview', title: 'Overview of VECTOR', read: true,
-    description: 'The starting point of every conversation. Returns who you act for, their companies with directions, audiences and topics, every sales vector with the number of cards in each stage and running campaigns, and what needs attention (replies waiting for an answer, paused campaigns).',
+    description: 'The starting point of every conversation. Vectors and campaigns carry their creation date (created), newest campaigns first. Returns who you act for, their companies with directions, audiences and topics, every sales vector with the number of cards in each stage and running campaigns, and what needs attention (replies waiting for an answer, paused campaigns).',
     inputSchema: obj({}) },
   { name: 'get_parameter', title: 'Settings of a parameter', read: true,
     description: 'Full settings of one company, direction, audience or topic by id. For a topic: the hook, offer, tone, call to action, proof, things to avoid, sample letter and the criterion a client company must meet. For a company: its mailboxes (addresses only). Read the topic before writing or judging letters for it.',
@@ -124,7 +124,10 @@ class ToolError extends Error {}
 // ---------- The server ----------
 module.exports = function makeBridge({ db, lib, fetchFn, calls }) {
   const col = (n) => db().collection(n);
-  const one = async (n, id) => { const s = await col(n).doc(String(id || '-')).get(); return s.exists ? Object.assign({ id: s.id }, s.data()) : null; };
+  const born = (x) => (x.createTime && x.createTime.toMillis ? { _ct: x.createTime.toMillis() } : {});
+  const one = async (n, id) => { const s = await col(n).doc(String(id || '-')).get(); return s.exists ? Object.assign({ id: s.id }, born(s), s.data()) : null; };
+  const day = (ms) => (ms ? new Date(ms).toISOString().slice(0, 10) : '');
+  const made = (d) => day(d.at || d._ct);
   const clip = (x, n) => { const s = String(x == null ? '' : x); return s.length > n ? s.slice(0, n) + '…' : s; };
   const drop = (o) => { const out = {}; Object.keys(o).forEach((k) => { const v = o[k]; if (v !== '' && v != null && !(Array.isArray(v) && !v.length) && v !== false) out[k] = v; }); return out; };
 
@@ -144,13 +147,13 @@ module.exports = function makeBridge({ db, lib, fetchFn, calls }) {
   }
   const sees = (me, d) => !!d && (me.superAdmin || (d.acl || []).includes(me.uid) || (d.acl || []).includes('*'));
   const mine = async (me, n) => { // every document of a collection this person may see
-    if (me.superAdmin) return (await col(n).get()).docs.map((x) => Object.assign({ id: x.id }, x.data()));
+    if (me.superAdmin) return (await col(n).get()).docs.map((x) => Object.assign({ id: x.id }, born(x), x.data()));
     const [a, b] = await Promise.all([col(n).where('acl', 'array-contains', me.uid).get(), n === 'params' ? col(n).where('acl', 'array-contains', '*').get() : { docs: [] }]), seen = {};
-    return a.docs.concat(b.docs).filter((x) => !seen[x.id] && (seen[x.id] = 1)).map((x) => Object.assign({ id: x.id }, x.data()));
+    return a.docs.concat(b.docs).filter((x) => !seen[x.id] && (seen[x.id] = 1)).map((x) => Object.assign({ id: x.id }, born(x), x.data()));
   };
   const need = (x, what) => { if (!x) throw new ToolError(`${what} was not found or you have no access to it.`); return x; };
   const cardOf = async (me, id) => { const c = await one('cards', id); return need(sees(me, c) ? c : null, 'The card'); };
-  const cardBrief = (c) => drop({ id: c.id, type: c.type, title: c.title, stage: c.stage, next_step: (c.next || {}).text, next_date: (c.next || {}).date, reply_waiting: !!c.awaiting, needs_attention: c.alert ? 'paused: too many bounced letters' : '',
+  const cardBrief = (c) => drop({ id: c.id, type: c.type, title: c.title, created: made(c), stage: c.stage, next_step: (c.next || {}).text, next_date: (c.next || {}).date, reply_waiting: !!c.awaiting, needs_attention: c.alert ? 'paused: too many bounced letters' : '',
     email: (c.f || {}).email, company: (c.f || {}).company, job_title: (c.f || {}).jobTitle, tags: c.tags, from_campaign: c.parent, done: c.type === 'task' ? !!c.done : undefined });
   const leadBrief = (l) => { const f = l.f || {}, ch = l.chk || {}; return drop({ id: l.id, name: [f.firstName, f.lastName].filter(Boolean).join(' '), email: f.email, company: f.company, job_title: f.jobTitle, website: f.website, country: f.country, state: f.state, city: f.city,
     tags: l.tags, variant_set: ['A', 'B', 'C'].includes(l.var) ? l.var : '', fits: ch.s === 'yes' ? 'yes' : ch.s === 'no' ? 'no' : ch.s === 'unsure' ? 'unsure' : '', evidence: clip(ch.ev, 240), left_out: !!l.off, blocked: l.blocked || '', has_card: l.card }); };
@@ -184,9 +187,9 @@ module.exports = function makeBridge({ db, lib, fetchFn, calls }) {
       const zone = (z) => params.filter((p) => p.zone === z).map((p) => drop({ id: p.id, name: p.name, company_id: z === 'direction' ? p.company : '', about: z === 'direction' ? clip((p.s || {}).desc, 300) : '', good_fit_when: z === 'direction' ? (p.s || {}).criteria : '', hook: z === 'topic' ? clip((p.s || {}).hook, 160) : '',
         website: z === 'company' ? (p.s || {}).website : '', profile: z === 'company' ? profile(p.s || {}) : '', mailboxes: z === 'company' ? (((p.s || {}).mailboxes) || []).map((b) => b.email) : '' }));
       const vs = vectors.map((v) => { const mineCards = cards.filter((c) => c.vid === v.id), stages = {}; mineCards.forEach((c) => { stages[c.stage] = (stages[c.stage] || 0) + 1; });
-        return drop({ id: v.id, company: (byId[v.company] || {}).name, direction: (byId[v.direction] || {}).name, audience: (byId[v.audience] || {}).name, topic: (byId[v.topic] || {}).name,
+        return drop({ id: v.id, created: made(v), company: (byId[v.company] || {}).name, direction: (byId[v.direction] || {}).name, audience: (byId[v.audience] || {}).name, topic: (byId[v.topic] || {}).name,
           parameter_ids: { company: v.company, direction: v.direction, audience: v.audience, topic: v.topic }, cards_by_stage: stages,
-          campaigns: mineCards.filter((c) => c.type === 'campaign').map((c) => drop({ id: c.id, title: c.title, running: !!running[c.id], paused: !!(running[c.id] && running[c.id].paused) })) }); });
+          campaigns: mineCards.filter((c) => c.type === 'campaign').sort((x, y) => (y.at || y._ct || 0) - (x.at || x._ct || 0)).map((c) => drop({ id: c.id, title: c.title, created: made(c), running: !!running[c.id], paused: !!(running[c.id] && running[c.id].paused) })) }); });
       const waiting = cards.filter((c) => c.awaiting).map((c) => ({ id: c.id, title: c.title, vector_id: c.vid, since: (c.next || {}).date || '' }));
       return { you_act_for: { name: me.name, role: me.superAdmin ? 'super admin (sees everything)' : 'user' }, today: new Date().toISOString().slice(0, 10),
         companies: zone('company'), directions: zone('direction'), audiences: zone('audience'), topics: zone('topic'), vectors: vs,
@@ -202,8 +205,8 @@ module.exports = function makeBridge({ db, lib, fetchFn, calls }) {
     async get_vector(me, a) {
       const v = await one('vectors', a.vector_id); need(sees(me, v) ? v : null, 'The vector');
       const [ps, cards] = await Promise.all([Promise.all(['company', 'direction', 'audience', 'topic'].map((z) => one('params', v[z]))), col('cards').where('vid', '==', v.id).get()]);
-      const list = cards.docs.map((x) => Object.assign({ id: x.id }, x.data())).filter((c) => sees(me, c));
-      return { id: v.id, company: ps[0] && { id: ps[0].id, name: ps[0].name }, direction: ps[1] && { id: ps[1].id, name: ps[1].name }, audience: ps[2] && { id: ps[2].id, name: ps[2].name }, topic: ps[3] && { id: ps[3].id, name: ps[3].name, hook: clip(((ps[3].s) || {}).hook, 400) },
+      const list = cards.docs.map((x) => Object.assign({ id: x.id }, born(x), x.data())).filter((c) => sees(me, c));
+      return { id: v.id, created: made(v), company: ps[0] && { id: ps[0].id, name: ps[0].name }, direction: ps[1] && { id: ps[1].id, name: ps[1].name }, audience: ps[2] && { id: ps[2].id, name: ps[2].name }, topic: ps[3] && { id: ps[3].id, name: ps[3].name, hook: clip(((ps[3].s) || {}).hook, 400) },
         opt_out_line: (v.opt || {}).on ? (v.opt || {}).text || 'on' : 'off', library_links: (await handlers.get_library(me)).links.filter((d) => !d.company || d.company === (ps[0] || {}).name).slice(0, 30), cards: list.slice(0, 300).map(cardBrief), total_cards: list.length };
     },
     async get_card(me, a) {
@@ -346,7 +349,7 @@ module.exports = function makeBridge({ db, lib, fetchFn, calls }) {
       const names = { company: ps.company.name, direction: ps.direction.name, audience: ps.audience.name, topic: ps.topic.name };
       const same = (await mine(me, 'vectors')).find((v) => Object.keys(ids).every((z) => v[z] === ids[z]));
       if (same) return Object.assign({ already_exists: true, id: same.id }, names);
-      const v = Object.assign({ id: nid('v'), owner: me.uid, members: [], acl: [me.uid], ord: Date.now() }, ids);
+      const v = Object.assign({ id: nid('v'), at: Date.now(), owner: me.uid, members: [], acl: [me.uid], ord: Date.now() }, ids);
       await col('vectors').doc(v.id).set(v);
       return Object.assign({ created: true, id: v.id }, names);
     },
@@ -359,7 +362,7 @@ module.exports = function makeBridge({ db, lib, fetchFn, calls }) {
       if (type === 'contact' && f.email) { const twin = (await col('cards').where('vid', '==', v.id).get()).docs.map((x) => Object.assign({ id: x.id }, x.data())).find((c) => c.type === 'contact' && String((c.f || {}).email || '').toLowerCase() === f.email);
         if (twin) return { already_exists: true, id: twin.id, title: twin.title, stage: twin.stage, note: 'A contact with this email is already on this board. Use that card.' }; }
       const date = txt(a.next_date, 10); if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new ToolError('next_date must look like 2026-12-01.');
-      const c = { id: nid('k'), vid: v.id, owner: me.uid, acl: (v.acl || [me.uid]).slice(), ord: Date.now(), type, stage: STAGE.includes(a.stage) ? a.stage : 'new', title, vec: { company: v.company, direction: v.direction, audience: v.audience, topic: v.topic }, f,
+      const c = { id: nid('k'), at: Date.now(), vid: v.id, owner: me.uid, acl: (v.acl || [me.uid]).slice(), ord: Date.now(), type, stage: STAGE.includes(a.stage) ? a.stage : 'new', title, vec: { company: v.company, direction: v.direction, audience: v.audience, topic: v.topic }, f,
         next: { text: txt(a.next_step, 300), date }, awaiting: false, auto: { follow: false, reply: false, notify: true, draft: true }, notes: txt(a.notes, 6000), photo: '', blocked: '', okEmail: '', via: 'claude' };
       await col('cards').doc(c.id).set(c);
       return Object.assign({ created: true }, cardBrief(c), { vector_id: v.id, next: type === 'campaign' ? 'Now add recipients (add_recipients), write the letters (set_letters) and choose the mailbox (update_card).' : type === 'contact' ? 'To write to this person, save the letter with set_letters and choose the mailbox with update_card.' : '' });
@@ -458,12 +461,23 @@ module.exports = function makeBridge({ db, lib, fetchFn, calls }) {
       const holes = {}; all.forEach((l) => fresh.forEach((p) => lib.emptyVars(l.subject + '\n' + l.body, Object.assign({ myName: 'x', project: (p.chk || {}).proj || '' }, p.f)).forEach((f) => { const k = `${l.letter} needs {{${f}}}`; holes[k] = (holes[k] || 0) + 1; })));
       Object.keys(holes).forEach((k) => problems.push(`${k}, empty for ${holes[k]} of ${fresh.length}. Fill it in, drop it, or put the phrase in [[double brackets]].`));
       const run = await col('runs').doc(c.id).get(), notes = [], shares = {};
+      // The rules as they are set right now, and when the letters would actually leave under them.
+      const R = Object.assign({ start: 3, step: 2, cap: 10, gapMin: 10, gapMax: 20, from: 9, to: 17, workdays: true, perDomain: 2, bounce: 3, coldSecondary: true }, (sh.exists && sh.data().send) || {});
+      const ms = box ? ((await col('mailstate').doc(box.email).get()).data() || {}) : {}, tzMe = await zoneOf(me), today = lib.localParts(Date.now(), tzMe).day, usedToday = ms.day === today ? ms.newToday || 0 : 0;
+      const plan = []; let left = fresh.length, t = Date.now();
+      for (let i = 0; i < 40 && left > 0; i++, t += 86400000) { const p = lib.localParts(t, tzMe); if (R.workdays && p.weekend) continue; const room = Math.max(0, lib.capFor(R, ms.firstAt, t) - (i === 0 ? usedToday : 0)), n = Math.min(left, room); if (n) plan.push({ date: p.day, first_letters: n }); left -= n; }
+      const firstGap = all.filter((l) => l.letter.endsWith('2')).map((l) => l.day)[0], unit = { d: 'days', h: 'hours', m: 'minutes' }[seq.unit || 'd'];
+      const ruleText = { new_letters_a_day_from_this_mailbox: `${lib.capFor(R, ms.firstAt, Date.now())} today (starts at ${R.start}, +${R.step} every week, never more than ${R.cap}); ${usedToday} already used today`, pause_between_letters: `${R.gapMin}-${R.gapMax} minutes`,
+        hours: `${R.from}:00-${R.to}:00 in each recipient's own time zone${R.workdays ? ', Monday to Friday' : ', every day'}`, per_client_company_a_day: +R.perDomain || 'no limit', pause_when_bounced_share_over: R.bounce ? R.bounce + ' %' : 'off', cold_letters_only_from_secondary_mailbox: !!R.coldSecondary,
+        who_changes_them: 'the person, in VECTOR (Sending rules)' };
+      const forecast = fresh.length ? { first_letters_by_day: plan, all_first_letters_out_by: plan.length ? plan[plan.length - 1].date : '', reminders: firstGap ? `each person gets the reminder ${firstGap} ${unit} after their first letter, unless they replied; reminders do not count against the daily limit of new letters` : 'no reminders in this chain',
+        may_take_longer_because: 'other campaigns from the same mailbox share the daily limit; a letter waits for the recipient\'s working hours; the per-company limit can move colleagues to the next day', dates_are_in: tzMe } : null;
       if (!solo && letters.variants.length > 1) { const pick = lib.assignVariants(c.seq || {}, people); fresh.forEach((l) => { shares[pick[l.id]] = (shares[pick[l.id]] || 0) + 1; }); }
       const sender = box ? box.name || me.name : '', lang = String(seq.lang || 'en').toLowerCase();
       if (sender && /[^\u0000-\u024f]/.test(sender) && !['uk', 'ru', 'bg', 'sr', 'kk', 'be'].includes(lang)) notes.push(`The sender name of ${box.email} is "${sender}" — not in Latin letters, while the letters are in "${lang}". Recipients read it next to the address. Offer the person a Latin spelling and save it with set_company_profile (company_id, mailbox, sender_name).`);
       return Object.assign({ ready: !problems.length }, drop({ problems, notes, variant_shares: shares, card: c.title, kind: solo ? 'one contact' : 'campaign', mailbox: box ? box.email : '', sender_name: box ? box.name || me.name : '', would_write_to: fresh.length, already_written_to: people.length - fresh.length, skipped_forbidden: forbidden.length,
         people: fresh.slice(0, 15).map((l) => drop({ name: [l.f.firstName, l.f.lastName].filter(Boolean).join(' '), email: l.f.email, company: l.f.company })), opt_out_line: (c.optOut == null ? !!((v || {}).opt || {}).on : !!c.optOut) ? ((v || {}).opt || {}).text || 'on' : 'off',
-        letters, already_running: run.exists && run.data().status === 'active', paused: run.exists && run.data().paused ? 'paused: too many bounced letters; a start continues it' : '', sending_rules: 'daily limits, pauses between letters, the recipient\'s working hours; set by the person in VECTOR' }));
+        letters, already_running: run.exists && run.data().status === 'active', paused: run.exists && run.data().paused ? 'paused: too many bounced letters; a start continues it' : '', sending_rules: ruleText, forecast }));
     },
     async start_sending(me, a) {
       const words = goAhead(a), c = await cardOf(me, a.card_id); await calls.countUse(me.uid, 'bl', 20);

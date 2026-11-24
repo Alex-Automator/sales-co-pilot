@@ -655,6 +655,7 @@
         ${DOC_STAGES.includes(c.stage) && c.type !== 'task' ? `<div class="box docsbox"><div class="bh">${t('docsBox')}</div>${
           S.gdocs.filter((d) => d.card === c.id).map((d) => `<div class="lrow"><span class="num">${esc(d.no.slice(-2))}</span><span class="lt">${t('doc_' + d.type)}</span><span class="ty">${t('draft')}</span></div>`).join('')}
           <div class="row2 gen"><select class="in" data-doctype>${DOC_TYPES.map((x) => `<option value="${x}">${t('doc_' + x)}</option>`).join('')}</select><button class="btn sm" data-act="prepDoc">${t('prepare')}</button></div></div>` : ''}
+        ${c.at ? `<p class="sub small">${t('createdAt')} ${new Date(c.at).toLocaleDateString([], { day: '2-digit', month: '2-digit', year: 'numeric' })}${c.via === 'claude' ? ' · Claude' : ''}</p>` : ''}
         <div class="acts"><button class="btn ghost sm" data-act="clone">${t('clone')}</button>
           <button class="btn ghost sm danger" data-act="del">${ui.delArm ? t('delSure') : t('del')}</button>
           <button class="btn sm" data-act="close">${t('close')}</button></div>
@@ -774,7 +775,7 @@
     } else {
       const v = S.vectors.find((x) => x.id === e.id); if (!v) return '';
       left = `<div class="bh">${t('vector')}</div><div class="chev stack">${chevron(v, {})}</div>
-        <div class="kvs">${ZONES.map((z) => `<div class="kv"><span>${t('zone_' + z)}</span><b>${esc((item(z, v[z]) || {}).name || '—')}</b></div>`).join('')}</div>
+        <div class="kvs">${ZONES.map((z) => `<div class="kv"><span>${t('zone_' + z)}</span><b>${esc((item(z, v[z]) || {}).name || '—')}</b></div>`).join('')}${v.at ? `<div class="kv"><span>${t('createdAt')}</span><b>${new Date(v.at).toLocaleDateString([], { day: '2-digit', month: '2-digit', year: 'numeric' })}</b></div>` : ''}</div>
         <div class="brief"><div class="bh">${t('vecLetters')}</div>
           <button class="tog" data-act="vecOpt"><span class="sw ${optOf(v).on ? 'on' : ''}"><i></i></span><span>${t('footOn')}<small>${t('vecOptHint')}</small></span></button>
           ${optOf(v).on ? `<textarea class="in" rows="3" data-vopt placeholder="${t('footPh')}">${esc(optOf(v).text || '')}</textarea><p class="sub small">${t('footHint')}</p>` : ''}</div>`;
@@ -1042,7 +1043,7 @@
     leadClear() { if (!ui.delArm) { ui.delArm = true; render(); return; } const id = ui.open; S.leads = S.leads.filter((l) => l.cid !== id); ui.delArm = false; ui.imp = null; commit(); },
     leadCard(d) {
       const l = S.leads.find((x) => x.id === d.id), c = cur(); if (!l) return;
-      const k = { id: uid('k'), vid: c.vid, owner: au.uid, acl: (c.acl || []).slice(), ord: Date.now(), type: 'contact', stage: 'new', title: [l.f.firstName, l.f.lastName].filter(Boolean).join(' ') || l.f.company || l.f.email, vec: Object.assign({}, c.vec), parent: c.id,
+      const k = { id: uid('k'), at: Date.now(), vid: c.vid, owner: au.uid, acl: (c.acl || []).slice(), ord: Date.now(), type: 'contact', stage: 'new', title: [l.f.firstName, l.f.lastName].filter(Boolean).join(' ') || l.f.company || l.f.email, vec: Object.assign({}, c.vec), parent: c.id,
         f: { jobTitle: l.f.jobTitle || '', company: l.f.company || '', email: l.f.email, phone: l.f.phone || '', linkedin: l.f.linkedin || '' }, next: { text: '', date: '' },
         awaiting: false, auto: { follow: false, reply: false, notify: true, draft: true }, notes: (l.chk && l.chk.ev) || '', photo: '', blocked: l.blocked || '', okEmail: l.okEmail || '', tags: (l.tags || []).slice() };
       S.cards.push(k); l.card = k.id; commit();
@@ -1130,7 +1131,7 @@
     unpick(d) { delete S.draft[d.zone]; if (d.zone === 'company') delete S.draft.direction; commit(); },
     fixVector() {
       if (!draftComplete() || sameVector(S.draft)) return;
-      const v = { id: uid('v'), owner: au.uid, members: [], acl: [au.uid], ord: Date.now() }; ZONES.forEach((z) => { v[z] = S.draft[z]; });
+      const v = { id: uid('v'), at: Date.now(), owner: au.uid, members: [], acl: [au.uid], ord: Date.now() }; ZONES.forEach((z) => { v[z] = S.draft[z]; });
       S.vectors.unshift(v); S.draft = {}; ui.fresh = v.id; commit();
       const top = document.querySelector('.vtop'); if (top) top.scrollTop = 0;
     },
@@ -1181,7 +1182,7 @@
     rmPhoto() { cur().photo = ''; commit(); },
     clone() {
       const c = cur(); const n = JSON.parse(JSON.stringify(c));
-      n.id = uid('k'); n.owner = au.uid; n.blocked = ''; n.ord = Date.now(); n.title = c.title + ' (2)'; S.cards.push(n); ui.open = n.id; commit();
+      n.id = uid('k'); n.at = Date.now(); delete n.mail; delete n.runAt; delete n.alert; n.owner = au.uid; n.blocked = ''; n.ord = Date.now(); n.title = c.title + ' (2)'; S.cards.push(n); ui.open = n.id; commit();
     },
     del() {
       if (!ui.delArm) { ui.delArm = true; render(); return; }
@@ -1234,7 +1235,7 @@
       ui.adding = null; commit();
     } else if (el.dataset.addcard) {
       const av = activeVector(), vec = {}; ZONES.forEach((z) => { vec[z] = av[z]; });
-      S.cards.push({ id: uid('k'), vid: av.id, owner: au.uid, acl: (av.acl || []).slice(), ord: Date.now(), type: 'task', stage: el.dataset.addcard, title: v, vec, f: {}, next: { text: '', date: '' },
+      S.cards.push({ id: uid('k'), at: Date.now(), vid: av.id, owner: au.uid, acl: (av.acl || []).slice(), ord: Date.now(), type: 'task', stage: el.dataset.addcard, title: v, vec, f: {}, next: { text: '', date: '' },
         awaiting: false, auto: { follow: false, reply: false, notify: true, draft: true }, notes: '', photo: '' });
       commit();
     } else if (el.dataset.listadd && p) {

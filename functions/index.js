@@ -387,6 +387,12 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
 
   // 1a. Has anyone answered? Every recipient with a letter out is looked at every 10 minutes (hourly after three days),
   // whenever their next letter is due. Records made before this check existed get it once.
+  // One time: vectors and cards made before creation dates existed get theirs from the database's own record.
+  const bornFlag = db().collection('meta').doc('created'), bornSeen = await bornFlag.get();
+  if (!bornSeen.exists) {
+    for (const n of ['vectors', 'cards']) { const all = await db().collection(n).get(); await inChunks(all.docs.filter((x) => !x.data().at && x.createTime), 20, (x) => x.ref.update({ at: x.createTime.toMillis() })); }
+    await bornFlag.set({ at: now });
+  }
   const flag = db().collection('meta').doc('checks'), seen = await flag.get();
   if (!seen.exists) {
     const old = await db().collection('sends').where('status', '==', 'active').get();
