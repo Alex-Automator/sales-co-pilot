@@ -146,7 +146,10 @@ button.chev:hover .seg{background:var(--accsoft);color:var(--acctx)}
 .pimg.xl{width:100%;height:100%;border-radius:0;background:none}.pimg.xl svg{width:40px;height:40px}
 .mono{filter:grayscale(1) contrast(1.05)}
 .pi .cnt span{padding:2px 7px;font-size:11px;min-width:22px;text-align:center}
-.vrow .cnt{min-width:168px;justify-content:flex-end}
+.vrow .cnt{min-width:150px;justify-content:flex-end}
+.vrow .tys{display:flex;gap:10px;flex:none;width:176px;align-items:center;color:var(--mut);font-size:13px;font-weight:600}
+.vrow .tyc{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}.vrow .tyc .tyi{display:inline-grid;width:16px;height:16px}.vrow .tyc .tyi svg{width:16px;height:16px}
+.vrow .tyc.none{font-weight:400;font-size:12px}
 .dots{width:28px;height:28px;border-radius:6px;text-align:center;color:var(--mut);font-size:18px;line-height:1;flex:none;opacity:.5}
 .pi:hover .dots,.vrow:hover .dots,.dots:focus{opacity:1}
 .dots:hover{background:var(--line);color:var(--ink)}
@@ -311,7 +314,7 @@ p.later{padding:22px 8px;color:var(--mut)}
   .chev .seg,.chev .seg:first-child,.chev.draft.ready .seg{flex:1 1 calc(50% - 4px);margin:0;clip-path:none;border-radius:8px;height:40px;padding:0 10px;animation:none}
   .pimg.sm{display:grid}
   .vrow{flex-wrap:wrap;gap:8px;padding:10px 0;border-bottom:1px solid var(--line)}
-  .vrow .cnt{flex:1;justify-content:flex-start;min-width:0}
+  .vrow .cnt{flex:1;justify-content:flex-start;min-width:0}.vrow .tys{width:auto}
   .builder{flex-wrap:wrap}.bl{width:100%}.builder>.btn{width:100%}
   .pi{height:60px}
   /* board: one stage per screen, swipe sideways */

@@ -143,9 +143,13 @@
 
   function vVector() {
     const rows = myVectors().map((v) => {
-      const n = tally(S.cards.filter((c) => inVector(c, v)));
+      const mine = S.cards.filter((c) => inVector(c, v)), n = tally(mine), open = mine.filter((c) => c.stage !== 'signed' && c.stage !== 'lost');
+      // Open cards by type: an icon with a number, the word is in the tooltip.
+      const kinds = ['campaign', 'company', 'contact', 'task'].map((k) => [k, open.filter((c) => c.type === k).length]).filter((x) => x[1])
+        .map(([k, q]) => `<span class="tyc" title="${t('openCards')}: ${t('type_' + k)} · ${q}"><span class="tyi">${svg(TYPE_ICONS[k])}</span>${q}</span>`).join('');
       return `<div class="vrow ${ui.fresh === v.id ? 'fresh' : ''}">
         <button class="chev" data-act="openVector" data-id="${v.id}">${chevron(v, {})}</button>
+        <span class="tys" title="${t('openCards')}">${kinds || `<span class="tyc none">${t('noOpenCards')}</span>`}</span>
         <span class="cnt">${CLOUD && v.owner !== au.uid ? `<small class="ownr">${esc(userName(v.owner))}</small>` : ''}${pills(n)}</span>
         <button class="btn sm" data-act="openVector" data-id="${v.id}">${t('openBoard')}</button>
         <button class="dots" data-act="editVector" data-id="${v.id}" title="${t('edit')}">⋯</button></div>`;
