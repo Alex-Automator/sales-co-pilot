@@ -324,3 +324,5 @@ titles when the variants name them, otherwise equal shares where colleagues from
 company name) get different variants. list_recipients and launch_check show the result before a launch. The bridge
 can also set a mailbox's sender name (set_sender_name) and launch_check warns about a non-Latin name for Latin-script
 letters.
+The sender name is set through set_company_profile (company_id, mailbox, sender_name): a separate tool for it did not
+reach Claude's tool list, while changed parameters of existing tools do arrive in a new chat.

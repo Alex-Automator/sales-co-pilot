@@ -4,7 +4,7 @@
 const crypto = require('crypto');
 
 const VERSIONS = ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
-const SERVER = { name: 'vector-sales-co-pilot', title: 'VECTOR — Sales-co-pilot', version: '0.8.1' };
+const SERVER = { name: 'vector-sales-co-pilot', title: 'VECTOR — Sales-co-pilot', version: '0.8.2' };
 const hashKey = (key) => crypto.createHash('sha256').update(String(key)).digest('hex');
 const newKey = () => 'vk_' + crypto.randomBytes(32).toString('base64url');
 
@@ -70,11 +70,8 @@ TOOLS.push(
     description: 'The full text of one conversation found by find_correspondence: every letter with sender, date and text, without quoted tails.',
     inputSchema: obj({ mailbox: str('The mailbox, as returned by find_correspondence.'), thread: str('The thread id, as returned by find_correspondence.') }, ['mailbox', 'thread']) },
   { name: 'set_company_profile', title: 'Write the profile of a company',
-    description: 'Saves what one of the person\'s companies does, so that you and VECTOR\'s own AI know which company should write to a client and what to say about it: about (what it does and sells), clients (who buys), when_to_use (when to write from this company rather than from the person\'s other companies — the boundary between them), not_doing, proof (cases, numbers, names). You may draft it from the company\'s website and what the person told you, but the boundary between their companies only they know: show the draft, let them correct it, save after they agree. Only the fields you pass are changed.',
-    inputSchema: obj({ company_id: str('Id of the company.'), about: str('What the company does and sells.'), clients: str('Who its clients are.'), when_to_use: str('When to write from this company and not from the others.'), not_doing: str('What it does not do.'), proof: str('Cases, numbers, names that can be mentioned.') }, ['company_id']) },
-  { name: 'set_sender_name', title: 'Set the sender name of a mailbox',
-    description: 'Sets the name recipients see next to the address of one of the person\'s own mailboxes, for example "Alexander Naumov". Use Latin letters for letters in languages written in Latin script. Agree the spelling with the person first. This is the only mailbox setting you can change: signatures and the list of mailboxes stay with the person.',
-    inputSchema: obj({ mailbox: str('Address of the mailbox.'), name: str('The sender name, up to 80 characters.') }, ['mailbox', 'name']) },
+    description: 'Saves what one of the person\'s companies does, so that you and VECTOR\'s own AI know which company should write to a client and what to say about it: about (what it does and sells), clients (who buys), when_to_use (when to write from this company rather than from the person\'s other companies — the boundary between them), not_doing, proof (cases, numbers, names). You may draft it from the company\'s website and what the person told you, but the boundary between their companies only they know: show the draft, let them correct it, save after they agree. Only the fields you pass are changed. The same tool also sets how the sender\'s name is written for one of the company\'s mailboxes (mailbox + sender_name); signatures and the list of mailboxes stay with the person.',
+    inputSchema: obj({ company_id: str('Id of the company.'), about: str('What the company does and sells.'), clients: str('Who its clients are.'), when_to_use: str('When to write from this company and not from the others.'), not_doing: str('What it does not do.'), proof: str('Cases, numbers, names that can be mentioned.'), mailbox: str('Optional, together with sender_name: the address of one of this company\'s mailboxes that the person owns.'), sender_name: str('Optional, together with mailbox: how the person\'s name is written next to that address in letters, for example Alexander Naumov. Use Latin letters when the letters are in a Latin-script language; agree the spelling with the person first.') }, ['company_id']) },
   { name: 'create_parameter', title: 'Create a direction, audience or topic',
     description: 'Creates a new direction (what is sold; belongs to one company), audience (who decides at the client) or topic (the reason to write). Check vector_overview first so that you do not create a second copy of something that exists. Companies are created by the person in VECTOR, not here. Settings — direction: desc, criteria (list). Audience: role (decision, influence or user), tone (formal, neutral or informal), regions, language, pains, notes. Topic: hook, offer, tones (list of: direct, friendly, expert, formal, brief, curious), cta, proof, avoid, sample, keywords, crit (what a client company must have or do to be written to), tag, terms (words to look for on a site, comma separated).',
     inputSchema: obj({ kind: { type: 'string', enum: ['direction', 'audience', 'topic'] }, name: str('Short name shown on the screen.'), company_id: str('For a direction: the company it belongs to.'), settings: { type: 'object', description: 'Settings as listed in the description.', additionalProperties: true } }, ['kind', 'name']) },
@@ -310,17 +307,17 @@ module.exports = function makeBridge({ db, lib, fetchFn, calls }) {
       if (!me.superAdmin && !(co.managers || []).includes(me.uid)) throw new ToolError('Only the super admin or an admin of this company changes its profile.');
       const map = { about: ['about', 3000], clients: ['clients', 2000], when_to_use: ['whenUse', 2000], not_doing: ['notDo', 2000], proof: ['proof', 3000] }, up = {}, done = [];
       Object.keys(map).forEach((k) => { if (a[k] != null) { up['s.' + map[k][0]] = txt(a[k], map[k][1]); done.push(k); } });
-      if (!done.length) throw new ToolError('Nothing to save: pass at least one of about, clients, when_to_use, not_doing, proof.');
+      let sender = null;
+      if (a.mailbox != null || a.sender_name != null) {
+        const want = txt(a.mailbox, 200).toLowerCase(), name = txt(a.sender_name, 80).replace(/[\r\n<>"]/g, ' ').trim(); if (!want || !name) throw new ToolError('To set a sender name pass both mailbox and sender_name.');
+        const boxes = (((co.s || {}).mailboxes) || []).map((b) => Object.assign({}, b)), box = boxes.find((b) => String(b.email).toLowerCase() === want);
+        if (!box) throw new ToolError(`${a.mailbox} is not a mailbox of ${co.name}. Its mailboxes: ${boxes.map((b) => b.email).join(', ') || 'none'}.`);
+        if (box.owner !== me.uid && !me.superAdmin) throw new ToolError(`${box.email} belongs to another person.`);
+        sender = { mailbox: box.email, sender_name: name, was: box.name || '(empty: the name from the Google profile was used)' }; box.name = name; up['s.mailboxes'] = boxes; done.push('sender_name');
+      }
+      if (!done.length) throw new ToolError('Nothing to save: pass at least one of about, clients, when_to_use, not_doing, proof, or mailbox with sender_name.');
       await col('params').doc(co.id).update(up);
-      return { saved: done, company: co.name };
-    },
-    async set_sender_name(me, a) {
-      const want = txt(a.mailbox, 200).toLowerCase(), name = txt(a.name, 80).replace(/[\r\n<>"]/g, ' ').trim(); if (!name) throw new ToolError('Give the sender name.');
-      const co = (await mine(me, 'params')).find((p) => p.zone === 'company' && (((p.s || {}).mailboxes) || []).some((b) => String(b.email).toLowerCase() === want)); if (!co) throw new ToolError(`${a.mailbox} is not a mailbox in VECTOR.`);
-      const boxes = co.s.mailboxes.map((b) => Object.assign({}, b)), box = boxes.find((b) => String(b.email).toLowerCase() === want);
-      if (box.owner !== me.uid && !me.superAdmin) throw new ToolError(`${box.email} belongs to another person.`);
-      const was = box.name || ''; box.name = name; await col('params').doc(co.id).update({ 's.mailboxes': boxes });
-      return { saved: true, mailbox: box.email, sender_name: name, was: was || '(empty: the name from the Google profile was used)', note: 'Applies to letters of campaigns started from now on; chains already running keep the old name.' };
+      return drop({ saved: done, company: co.name, sender, note: sender ? 'The name applies to campaigns started from now on; chains already running keep the old one.' : '' });
     },
     async create_parameter(me, a) {
       const kind = a.kind, name = txt(a.name, 120); if (!SETTINGS[kind]) throw new ToolError('kind must be direction, audience or topic. Companies are created by the person in VECTOR.'); if (!name) throw new ToolError('Give the parameter a name.');
@@ -463,7 +460,7 @@ module.exports = function makeBridge({ db, lib, fetchFn, calls }) {
       const run = await col('runs').doc(c.id).get(), notes = [], shares = {};
       if (!solo && letters.variants.length > 1) { const pick = lib.assignVariants(c.seq || {}, people); fresh.forEach((l) => { shares[pick[l.id]] = (shares[pick[l.id]] || 0) + 1; }); }
       const sender = box ? box.name || me.name : '', lang = String(seq.lang || 'en').toLowerCase();
-      if (sender && /[^\u0000-\u024f]/.test(sender) && !['uk', 'ru', 'bg', 'sr', 'kk', 'be'].includes(lang)) notes.push(`The sender name of ${box.email} is "${sender}" — not in Latin letters, while the letters are in "${lang}". Recipients read it next to the address. Offer the person a Latin spelling and save it with set_sender_name.`);
+      if (sender && /[^\u0000-\u024f]/.test(sender) && !['uk', 'ru', 'bg', 'sr', 'kk', 'be'].includes(lang)) notes.push(`The sender name of ${box.email} is "${sender}" — not in Latin letters, while the letters are in "${lang}". Recipients read it next to the address. Offer the person a Latin spelling and save it with set_company_profile (company_id, mailbox, sender_name).`);
       return Object.assign({ ready: !problems.length }, drop({ problems, notes, variant_shares: shares, card: c.title, kind: solo ? 'one contact' : 'campaign', mailbox: box ? box.email : '', sender_name: box ? box.name || me.name : '', would_write_to: fresh.length, already_written_to: people.length - fresh.length, skipped_forbidden: forbidden.length,
         people: fresh.slice(0, 15).map((l) => drop({ name: [l.f.firstName, l.f.lastName].filter(Boolean).join(' '), email: l.f.email, company: l.f.company })), opt_out_line: (c.optOut == null ? !!((v || {}).opt || {}).on : !!c.optOut) ? ((v || {}).opt || {}).text || 'on' : 'off',
         letters, already_running: run.exists && run.data().status === 'active', paused: run.exists && run.data().paused ? 'paused: too many bounced letters; a start continues it' : '', sending_rules: 'daily limits, pauses between letters, the recipient\'s working hours; set by the person in VECTOR' }));
