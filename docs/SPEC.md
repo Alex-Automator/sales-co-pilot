@@ -326,3 +326,12 @@ can also set a mailbox's sender name (set_sender_name) and launch_check warns ab
 letters.
 The sender name is set through set_company_profile (company_id, mailbox, sender_name): a separate tool for it did not
 reach Claude's tool list, while changed parameters of existing tools do arrive in a new chat.
+
+Sending like a person (24 Nov 2026; switch "Send like a person" in the sending rules, on by default). The server runs
+every minute. For each mailbox and day it draws a plan: the day starts 5-90 minutes after the opening hour (in the
+recipient's time zone), and the number of new letters is the limit or, about three days in ten, one fewer. New letters
+are spread over the rest of the working day with uneven gaps (never shorter than the pause in the rules). Before each
+letter the server waits a random 5-40 seconds, so letters do not leave on the minute. A reminder of a chain counted in
+days is due on its day at a random time of the working day (moved to Monday from a weekend). Reminders are not counted
+against the daily limit of new letters. With the switch off the old behaviour stays: letters go as soon as the pause
+allows. Two runs of the server never overlap (a lease in `meta/tick`).

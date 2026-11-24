@@ -552,10 +552,36 @@ function planRun({ card, leads, myName, unitMs }) {
 
 // Sending rules, as plain functions.
 function localParts(ms, tz) {
-  const p = {}; new Intl.DateTimeFormat('en-CA', { timeZone: tz || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23', weekday: 'short' }).formatToParts(new Date(ms)).forEach((x) => { p[x.type] = x.value; });
-  return { day: `${p.year}-${p.month}-${p.day}`, hour: +p.hour, weekend: p.weekday === 'Sat' || p.weekday === 'Sun' };
+  const p = {}; new Intl.DateTimeFormat('en-CA', { timeZone: tz || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', weekday: 'short' }).formatToParts(new Date(ms)).forEach((x) => { p[x.type] = x.value; });
+  return { day: `${p.year}-${p.month}-${p.day}`, hour: +p.hour, minute: +p.minute, mins: +p.hour * 60 + +p.minute, weekend: p.weekday === 'Sat' || p.weekday === 'Sun' };
 }
-function inWindow(rules, ms, tz) { const p = localParts(ms, tz); if (rules.workdays && p.weekend) return false; return p.hour >= (+rules.from || 0) && p.hour < (+rules.to || 24); }
+// offMin moves the start of the working day later by that many minutes (a mailbox does not start on the dot every morning).
+function inWindow(rules, ms, tz, offMin) { const p = localParts(ms, tz); if (rules.workdays && p.weekend) return false; return p.mins >= (+rules.from || 0) * 60 + (+offMin || 0) && p.hour < (+rules.to || 24); }
+
+// ---------- Sending like a person, not like a timer ----------
+// All randomness comes through here, so that tests can replay a schedule.
+const chance = { rnd: () => Math.random() };
+const human = (rules) => rules.jitter !== false;
+// What a mailbox does today: when it starts (5-90 minutes after the hour the rules allow) and how many new letters it
+// writes (now and then one fewer than the limit, never more).
+function dayPlan(rules, firstAt, now) {
+  const cap = capFor(rules, firstAt, now); if (!human(rules)) return { off: 0, cap };
+  return { off: Math.round(5 + chance.rnd() * 85), cap: cap >= 3 && chance.rnd() < 0.3 ? cap - 1 : cap };
+}
+// When the next NEW letter may go: the rest of today's letters are spread over the rest of the working day, unevenly.
+function nextNewAt(rules, now, tz, leftToday) {
+  const gap = gapFor(rules, chance.rnd()); if (!human(rules) || leftToday <= 0) return now + gap;
+  const minsLeft = (+rules.to || 24) * 60 - localParts(now, tz).mins; if (minsLeft <= 0) return now + gap;
+  return now + Math.max(gap, Math.round((0.6 + 0.8 * chance.rnd()) * (minsLeft * 60000) / (leftToday + 1)));
+}
+// A reminder is due on its day at some moment of the working day, not at the very minute the first letter went.
+function reminderAt(rules, exact, tz) {
+  if (!human(rules)) return exact;
+  let t = exact; for (let i = 0; i < 3 && rules.workdays && localParts(t, tz).weekend; i++) t += 86400000;
+  const a = (+rules.from || 0) * 60 + 10, b = Math.max(a + 30, (+rules.to || 24) * 60 - 20), want = Math.round(a + chance.rnd() * (b - a));
+  return t + (want - localParts(t, tz).mins) * 60000;
+}
+const sleep = (ms) => (process.env.VECTOR_NO_DELAY ? Promise.resolve() : new Promise((r) => setTimeout(r, ms)));
 const capFor = (rules, firstAt, now) => Math.max(1, Math.min(+rules.cap || 10, (+rules.start || 3) + (+rules.step || 0) * Math.floor(Math.max(0, now - (firstAt || now)) / (7 * 86400000))));
 const gapFor = (rules, rnd) => { const a = Math.max(1, +rules.gapMin || 10), b = Math.max(a, +rules.gapMax || a); return Math.round((rules.jitter === false ? a : a + (b - a) * rnd) * 60000); };
 
@@ -563,13 +589,14 @@ const gapFor = (rules, rnd) => { const a = Math.max(1, +rules.gapMin || 10), b =
 const CHECK_EVERY = 10 * 60000, CHECK_SLOW = 60 * 60000, CHECK_FAST_FOR = 3 * 86400000;
 const nextCheck = (d, now) => now + (now - ((d.sentAt || []).slice(-1)[0] || now) < CHECK_FAST_FOR ? CHECK_EVERY : CHECK_SLOW);
 // Sends the next letter of one recipient's chain. Returns the fields to save on the send record.
-async function sendStep(fetchFn, tokens, d, run, now) {
+async function sendStep(fetchFn, tokens, d, run, now, rules) {
   const step = d.steps[d.i], plan = watchPlan(run.unitMs);
   const sent = await sendMail(fetchFn, { from: run.from, fromName: run.fromName || '', to: d.to, subject: step.subject, body: step.body, sig: run.sig, sigHtml: run.sigHtml, foot: run.foot, threadId: d.threadId || undefined, replyTo: d.firstMsgId || undefined }, tokens);
   const out = { status: 'active', i: d.i + 1, threadId: sent.threadId || d.threadId || '', threads: (d.threads || []).concat(d.threadId || [], sent.threadId || []).filter((x, i, a) => x && a.indexOf(x) === i), sentAt: (d.sentAt || []).concat([now]), errs: 0, err: '', chk: now + CHECK_EVERY };
   if (d.i === 0) out.firstMsgId = await messageId(fetchFn, tokens, run.from, sent.id).catch(() => '');
-  if (out.i < d.steps.length) out.due = now + d.steps[out.i].wait; else { out.due = now + plan.every; out.watchUntil = now + plan.span; }
+  // Chains counted in days get their reminder at an uneven time of that day; test chains in minutes and hours stay exact.
+  if (out.i < d.steps.length) { const exact = now + d.steps[out.i].wait; out.due = rules && run.unitMs >= 86400000 ? reminderAt(rules, exact, d.tz || run.tz) : exact; } else { out.due = now + plan.every; out.watchUntil = now + plan.span; }
   return out;
 }
 
-module.exports = { assignVariants, mailSearch, mailThread, tzOf, companyDomain, isAutoReply, replyKind, sentSince, nextCheck, convo, reply, replyPrompt, unquote, mailText, READ, SEND, wroteBack, sendState, emptyVars, rawMail, sendMail, MAILER, mailToken, planRun, sendStep, threadState, tokenFor, localParts, inWindow, capFor, gapFor, watchPlan, UNIT, FAR, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };
+module.exports = { chance, human, dayPlan, nextNewAt, reminderAt, sleep, assignVariants, mailSearch, mailThread, tzOf, companyDomain, isAutoReply, replyKind, sentSince, nextCheck, convo, reply, replyPrompt, unquote, mailText, READ, SEND, wroteBack, sendState, emptyVars, rawMail, sendMail, MAILER, mailToken, planRun, sendStep, threadState, tokenFor, localParts, inWindow, capFor, gapFor, watchPlan, UNIT, FAR, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };

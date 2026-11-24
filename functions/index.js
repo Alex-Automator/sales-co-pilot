@@ -331,7 +331,15 @@ async function replyCard(d, run, ref, kind) {
 }
 
 // Every two minutes: look for replies, then let each mailbox send at most one letter if the sending rules allow it.
-exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, memory: '512MiB', maxInstances: 1 }, async () => {
+exports.tick = onSchedule({ schedule: 'every 1 minutes', timeoutSeconds: 110, memory: '512MiB', maxInstances: 1, concurrency: 1 }, async () => {
+  // Runs every minute and may take most of a minute (letters wait a few random seconds). Two runs must never work at once.
+  if (db().runTransaction) {
+    const lease = db().collection('meta').doc('tick'), mine = await db().runTransaction(async (t) => { const d = await t.get(lease), until = (d.exists && d.data().until) || 0; if (Date.now() < until) return false; t.set(lease, { until: Date.now() + 100000 }); return true; });
+    if (!mine) { console.log('tick skipped: the previous run is still working'); return; }
+  }
+  try { await tickBody(); } finally { if (db().runTransaction) await db().collection('meta').doc('tick').set({ until: 0 }).catch(() => {}); }
+});
+async function tickBody() {
   const now = Date.now(), tokens = {}, runs = {}, rules = await rulesNow();
   const runOf = async (cid) => { if (!(cid in runs)) { const r = await db().collection('runs').doc(cid).get(); runs[cid] = r.exists ? Object.assign({ ref: r.ref }, r.data()) : null; } return runs[cid]; };
   const fail = async (ref, d, e) => { console.error('send failed', ref.id, e.message); const errs = (d.errs || 0) + 1;
@@ -451,17 +459,24 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
   const active = await db().collection('runs').where('status', '==', 'active').get(), byBox = {};
   active.docs.forEach((r) => { const x = Object.assign({ ref: r.ref }, r.data()); runs[x.cid] = runs[x.cid] || x; (byBox[x.from] = byBox[x.from] || []).push(runs[x.cid]); });
   Object.keys(follow).forEach((b) => { byBox[b] = byBox[b] || []; });
-  for (const boxMail of Object.keys(byBox)) {
+  // Mailboxes work side by side: each waits its own random seconds before a letter, so that letters do not leave on the
+  // minute, and one slow mailbox does not hold the others.
+  const human = lib.human(rules);
+  await Promise.all(Object.keys(byBox).map(async (boxMail) => {
     const msRef = db().collection('mailstate').doc(boxMail), msSnap = await msRef.get(), ms = msSnap.exists ? msSnap.data() : {};
-    if (now < (ms.nextAt || 0)) { note.boxes[boxMail] = 'pause until ' + new Date(ms.nextAt).toISOString(); continue; }
+    if (now < (ms.nextAt || 0)) { note.boxes[boxMail] = 'pause until ' + new Date(ms.nextAt).toISOString(); return; }
     const boxRuns = byBox[boxMail].sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0)), tz = (boxRuns[0] || (follow[boxMail] || [])[0].run).tz;
-    // Working hours are the recipient's (an estimate from country, state, email or website); the sender's when nothing is known.
-    const open = (z, run) => lib.inWindow(rules, now, z || run.tz);
     const today = lib.localParts(now, tz).day, newToday = ms.day === today ? ms.newToday || 0 : 0;
+    // Today's plan of the mailbox: when it starts and how many new letters it writes. Made once a day and kept.
+    let plan = human && ms.planDay === today && ms.dayCap ? { off: ms.dayOff || 0, cap: ms.dayCap } : null;
+    if (!plan) { plan = lib.dayPlan(rules, ms.firstAt, now); if (human) await msRef.set({ planDay: today, dayOff: plan.off, dayCap: plan.cap, nextNewAt: 0 }, { merge: true }); }
+    // Working hours are the recipient's (an estimate from country, state, email or website); the sender's when nothing is known.
+    const open = (z, run) => lib.inWindow(rules, now, z || run.tz, plan.off);
     const doms = ms.day === today ? JSON.parse(ms.doms || '{}') : {}, perDom = +rules.perDomain || 0;
     const waiting = (follow[boxMail] || []).filter((x) => !x.d.lock && !x.run.paused);
     let job = waiting.filter((x) => open(x.d.tz, x.run)).sort((a, b) => a.d.due - b.d.due)[0], first = false, asleep = waiting.length - (job ? 1 : 0), capped = 0;
-    if (!job && newToday < lib.capFor(rules, ms.firstAt, now)) {
+    const spread = human && ms.planDay === today && now < (ms.nextNewAt || 0);
+    if (!job && newToday < plan.cap && !spread) {
       // The next person in the queue whose working day is on and whose company has not had its share of new letters today.
       for (const run of boxRuns) {
         if (run.paused || job) continue;
@@ -475,25 +490,29 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
     // Last look before a letter leaves: is the campaign card still there, is the person still on the list and allowed?
     if (job) {
       const why = await stillWanted(job);
-      if (why === 'no card') { await endRun(job.run, now); note.boxes[boxMail] = 'campaign card deleted: run stopped'; continue; }
-      if (why) { await job.doc.ref.update({ status: 'stopped', due: lib.FAR, chk: (job.d.sentAt || []).length ? now : lib.FAR, endedAt: now, err: why }); note.boxes[boxMail] = `skipped ${job.d.to}: ${why}`; continue; }
+      if (why === 'no card') { await endRun(job.run, now); note.boxes[boxMail] = 'campaign card deleted: run stopped'; return; }
+      if (why) { await job.doc.ref.update({ status: 'stopped', due: lib.FAR, chk: (job.d.sentAt || []).length ? now : lib.FAR, endedAt: now, err: why }); note.boxes[boxMail] = `skipped ${job.d.to}: ${why}`; return; }
     }
-    if (!job) { note.boxes[boxMail] = `nothing to send now (outside their working hours: ${asleep}, company limit for today: ${capped}, new today ${newToday})`; continue; }
+    if (!job) { note.boxes[boxMail] = spread ? `next new letter not before ${new Date(ms.nextNewAt).toISOString()} (today ${newToday} of ${plan.cap})` : `nothing to send now (outside their working hours: ${asleep}, company limit for today: ${capped}, new today ${newToday} of ${plan.cap}, day starts ${plan.off} min after the hour)`; return; }
     try {
-      await job.doc.ref.update({ lock: now });
-      const out = Object.assign(await lib.sendStep(fetch, tokens, job.d, job.run, Date.now()), { lock: 0 });
+      if (human) await lib.sleep(5000 + lib.chance.rnd() * 35000);
+      const at = Date.now();
+      await job.doc.ref.update({ lock: at });
+      const out = Object.assign(await lib.sendStep(fetch, tokens, job.d, job.run, at, rules), { lock: 0 });
       // The letter is out. Saving that fact must not fail quietly, or the same letter would go again.
       for (let n = 0; ; n++) { try { await job.doc.ref.update(out); break; } catch (e) { if (n >= 3) { console.error('sent but not recorded', job.doc.id, e.message); break; } await new Promise((r) => setTimeout(r, 400 * (n + 1))); } }
       note.boxes[boxMail] = `sent letter ${job.d.i + 1} to ${job.d.to}`;
-      if (job.run.kind === 'contact') await db().collection('cards').doc(job.d.cid).update(Object.assign({ mail: { box: job.run.from, threads: out.threads || [], since: (out.sentAt || [now])[0] } }, first ? { stage: 'contacted' } : {})).catch(() => {});
+      if (job.run.kind === 'contact') await db().collection('cards').doc(job.d.cid).update(Object.assign({ mail: { box: job.run.from, threads: out.threads || [], since: (out.sentAt || [at])[0] } }, first ? { stage: 'contacted' } : {})).catch(() => {});
       if (first && job.d.dom) doms[job.d.dom] = (doms[job.d.dom] || 0) + 1;
-      await msRef.set({ firstAt: ms.firstAt || now, lastAt: now, nextAt: now + lib.gapFor(rules, Math.random()), day: today, newToday: newToday + (first ? 1 : 0), doms: JSON.stringify(doms) }, { merge: true });
+      const sentNew = newToday + (first ? 1 : 0);
+      await msRef.set(Object.assign({ firstAt: ms.firstAt || at, lastAt: at, nextAt: at + lib.gapFor(rules, lib.chance.rnd()), day: today, newToday: sentNew, doms: JSON.stringify(doms) },
+        human && first ? { nextNewAt: lib.nextNewAt(rules, at, tz, plan.cap - sentNew) } : {}), { merge: true });
     } catch (e) {
       note.boxes[boxMail] = 'failed: ' + e.message.slice(0, 200);
       await fail(job.doc.ref, job.d, e); await job.doc.ref.update({ lock: 0 }).catch(() => {});
       if (first && (job.d.errs || 0) + 1 < 3) { job.run.queue = job.run.queue.concat([job.doc.id]); await job.run.ref.update({ queue: job.run.queue }); await job.doc.ref.update({ due: lib.FAR }); }
     }
-  }
+  }));
   // 3. Too many letters came back? Bad addresses hurt the mailbox's reputation, so the campaign waits for a person to look.
   for (const run of Object.values(hit)) {
     try {
@@ -505,7 +524,7 @@ exports.tick = onSchedule({ schedule: 'every 2 minutes', timeoutSeconds: 110, me
     } catch (e) { console.error('bounce check failed', run.cid, e.message); }
   }
   if (note.due || note.checked || Object.keys(note.boxes).length) console.log('tick summary ' + JSON.stringify(note));
-});
+}
 
 // ---------- The bridge to Claude ----------
 // bridge is the address Claude connects to as a custom connector (MCP). It is public on the network, like any web
