@@ -4,7 +4,7 @@
 const crypto = require('crypto');
 
 const VERSIONS = ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
-const SERVER = { name: 'vector-sales-co-pilot', title: 'VECTOR — Sales-co-pilot', version: '0.7.3' };
+const SERVER = { name: 'vector-sales-co-pilot', title: 'VECTOR — Sales-co-pilot', version: '0.8.0' };
 const hashKey = (key) => crypto.createHash('sha256').update(String(key)).digest('hex');
 const newKey = () => 'vk_' + crypto.randomBytes(32).toString('base64url');
 
@@ -13,7 +13,7 @@ const INSTRUCTIONS = `VECTOR is the B2B sales program of the person you talk to.
 Three rules above all
 1. Nothing is sent without the person's clear go-ahead in this conversation ("Поїхали" or equally clear words). Before a launch: launch_check, tell them in a few lines what will go out (to whom, how many, from which mailbox, the first letter), ask "Поїхали?". Praise of a text, silence or an earlier go-ahead for something else is not a go-ahead. If they say stop, call stop_sending first.
 2. Never invent facts about their companies, prices, clients or results. When something needed for a good vector, campaign or letter is missing, ask one or two precise questions.
-3. You cannot change sending rules, access rights, the forbidden list or mailboxes, and you delete nothing. Those the person does in VECTOR.
+3. You cannot change sending rules, access rights, the forbidden list or mailboxes (except a mailbox's sender name), and you delete nothing. Those the person does in VECTOR.
 
 How VECTOR is organised
 A Sales Vector = Company (who sells) > Direction (what is sold) > Audience (who decides at the client) > Topic (the reason to write: hook, offer, tone, the criterion a client must meet). Each vector has a board: new, contacted, replied, meeting, proposal, negotiation, signed, lost. Cards: contact (one person), company, campaign (one letter chain to many people, variants A/B/C, reminders), task. The VECTOR server sends the letters by the sending rules (daily limits, pauses, the recipient's working hours).
@@ -72,6 +72,9 @@ TOOLS.push(
   { name: 'set_company_profile', title: 'Write the profile of a company',
     description: 'Saves what one of the person\'s companies does, so that you and VECTOR\'s own AI know which company should write to a client and what to say about it: about (what it does and sells), clients (who buys), when_to_use (when to write from this company rather than from the person\'s other companies — the boundary between them), not_doing, proof (cases, numbers, names). You may draft it from the company\'s website and what the person told you, but the boundary between their companies only they know: show the draft, let them correct it, save after they agree. Only the fields you pass are changed.',
     inputSchema: obj({ company_id: str('Id of the company.'), about: str('What the company does and sells.'), clients: str('Who its clients are.'), when_to_use: str('When to write from this company and not from the others.'), not_doing: str('What it does not do.'), proof: str('Cases, numbers, names that can be mentioned.') }, ['company_id']) },
+  { name: 'set_sender_name', title: 'Set the sender name of a mailbox',
+    description: 'Sets the name recipients see next to the address of one of the person\'s own mailboxes, for example "Alexander Naumov". Use Latin letters for letters in languages written in Latin script. Agree the spelling with the person first. This is the only mailbox setting you can change: signatures and the list of mailboxes stay with the person.',
+    inputSchema: obj({ mailbox: str('Address of the mailbox.'), name: str('The sender name, up to 80 characters.') }, ['mailbox', 'name']) },
   { name: 'create_parameter', title: 'Create a direction, audience or topic',
     description: 'Creates a new direction (what is sold; belongs to one company), audience (who decides at the client) or topic (the reason to write). Check vector_overview first so that you do not create a second copy of something that exists. Companies are created by the person in VECTOR, not here. Settings — direction: desc, criteria (list). Audience: role (decision, influence or user), tone (formal, neutral or informal), regions, language, pains, notes. Topic: hook, offer, tones (list of: direct, friendly, expert, formal, brief, curious), cta, proof, avoid, sample, keywords, crit (what a client company must have or do to be written to), tag, terms (words to look for on a site, comma separated).',
     inputSchema: obj({ kind: { type: 'string', enum: ['direction', 'audience', 'topic'] }, name: str('Short name shown on the screen.'), company_id: str('For a direction: the company it belongs to.'), settings: { type: 'object', description: 'Settings as listed in the description.', additionalProperties: true } }, ['kind', 'name']) },
@@ -92,12 +95,12 @@ TOOLS.push(
       mailbox: str('Address of the mailbox to send from.'), opt_out_line: { type: ['boolean', 'null'] }, criterion: obj({ text: str('What a company must have or do.'), tag: str('Short tag for those who fit.'), terms: str('Words to look for, comma separated.') }) }, ['card_id']) },
   { name: 'add_recipients', title: 'Add people to a campaign',
     description: 'Adds people to the list of a campaign (up to 200 per call). An email is required for each; addresses already in the list and addresses on the forbidden list are skipped and reported. Country and state help to send in the person\'s working hours. Nothing is sent by adding.',
-    inputSchema: obj({ card_id: str('Id of the campaign card.'), people: { type: 'array', maxItems: 200, items: obj({ first_name: FIELDS.first_name, last_name: FIELDS.last_name, email: FIELDS.email, company: FIELDS.company, job_title: FIELDS.job_title, website: FIELDS.website, country: FIELDS.country, state: FIELDS.state, city: FIELDS.city, phone: FIELDS.phone, linkedin: FIELDS.linkedin }, ['email']) } }, ['card_id', 'people']) },
+    inputSchema: obj({ card_id: str('Id of the campaign card.'), people: { type: 'array', maxItems: 200, items: obj({ first_name: FIELDS.first_name, last_name: FIELDS.last_name, email: FIELDS.email, company: FIELDS.company, job_title: FIELDS.job_title, website: FIELDS.website, country: FIELDS.country, state: FIELDS.state, city: FIELDS.city, phone: FIELDS.phone, linkedin: FIELDS.linkedin, variant: { type: 'string', enum: ['A', 'B', 'C', 'auto'], description: 'Which letter variant this person gets. Leave out or pass auto to let VECTOR decide: equal shares, and colleagues from one company get different variants.' } }, ['email']) } }, ['card_id', 'people']) },
   { name: 'update_recipient', title: 'Change a person in a campaign list',
-    description: 'Leaves a person out of a campaign or returns them (left_out), or corrects their fields. A person left out gets no further letters, also when the campaign is already running.',
-    inputSchema: obj({ card_id: str('Id of the campaign card.'), recipient_id: str('Id of the person, from list_recipients.'), left_out: { type: 'boolean' }, fields: obj({ first_name: FIELDS.first_name, last_name: FIELDS.last_name, company: FIELDS.company, job_title: FIELDS.job_title, website: FIELDS.website, country: FIELDS.country, state: FIELDS.state, city: FIELDS.city, phone: FIELDS.phone, linkedin: FIELDS.linkedin }) }, ['card_id', 'recipient_id']) },
+    description: 'Leaves a person out of a campaign or returns them (left_out), sets which letter variant they get (variant), or corrects their fields. A person left out gets no further letters, also when the campaign is already running.',
+    inputSchema: obj({ card_id: str('Id of the campaign card.'), recipient_id: str('Id of the person, from list_recipients.'), left_out: { type: 'boolean' }, variant: { type: 'string', enum: ['A', 'B', 'C', 'auto'], description: 'Which letter variant this person gets. Leave out or pass auto to let VECTOR decide: equal shares, and colleagues from one company get different variants.' }, fields: obj({ first_name: FIELDS.first_name, last_name: FIELDS.last_name, company: FIELDS.company, job_title: FIELDS.job_title, website: FIELDS.website, country: FIELDS.country, state: FIELDS.state, city: FIELDS.city, phone: FIELDS.phone, linkedin: FIELDS.linkedin }) }, ['card_id', 'recipient_id']) },
   { name: 'set_letters', title: 'Write the letters of a card',
-    description: 'Saves the letters of a campaign or a contact card. Each variant you pass is replaced as a whole by the chain you give (first letter and reminders); variants you do not pass stay. Variant A always exists; B and C are parallel versions compared on equal shares of the list, or sent to the job titles named in for_job_titles. Show the text to the person before saving and keep letters as drafts until they approve that exact text. In a campaign that is already running the change applies only to people added later.',
+    description: 'Saves the letters of a campaign or a contact card. Each variant you pass is replaced as a whole by the chain you give (first letter and reminders); variants you do not pass stay. Variant A always exists; B and C are parallel versions. Who gets which: a variant set on the person (add_recipients, update_recipient) wins; otherwise the job titles named in for_job_titles; otherwise equal shares, where colleagues from one company automatically get different variants. So one campaign is enough for several texts; list_recipients shows the variant each person will get. Show the text to the person before saving and keep letters as drafts until they approve that exact text. In a campaign that is already running the change applies only to people added later.',
     inputSchema: obj({ card_id: str('Id of the campaign or contact card.'), language: str('Language of sending, two letters, for example en.'), interval_unit: { type: 'string', enum: ['days', 'hours', 'minutes'], description: 'Unit of the day numbers. Days for real campaigns; minutes only for tests.' },
       variants: { type: 'array', minItems: 1, maxItems: 3, items: obj({ variant: { type: 'string', enum: ['A', 'B', 'C'] }, for_job_titles: str('Optional: job title words this variant is for, comma separated.'), letters: { type: 'array', minItems: 1, maxItems: 6, items: LETTER } }, ['variant', 'letters']) }, remove_variants: { type: 'array', items: { type: 'string', enum: ['B', 'C'] }, description: 'Variants to remove.' } }, ['card_id', 'variants']) },
 );
@@ -153,7 +156,7 @@ module.exports = function makeBridge({ db, lib, fetchFn, calls }) {
   const cardBrief = (c) => drop({ id: c.id, type: c.type, title: c.title, stage: c.stage, next_step: (c.next || {}).text, next_date: (c.next || {}).date, reply_waiting: !!c.awaiting, needs_attention: c.alert ? 'paused: too many bounced letters' : '',
     email: (c.f || {}).email, company: (c.f || {}).company, job_title: (c.f || {}).jobTitle, tags: c.tags, from_campaign: c.parent, done: c.type === 'task' ? !!c.done : undefined });
   const leadBrief = (l) => { const f = l.f || {}, ch = l.chk || {}; return drop({ id: l.id, name: [f.firstName, f.lastName].filter(Boolean).join(' '), email: f.email, company: f.company, job_title: f.jobTitle, website: f.website, country: f.country, state: f.state, city: f.city,
-    tags: l.tags, fits: ch.s === 'yes' ? 'yes' : ch.s === 'no' ? 'no' : ch.s === 'unsure' ? 'unsure' : '', evidence: clip(ch.ev, 240), left_out: !!l.off, blocked: l.blocked || '', has_card: l.card }); };
+    tags: l.tags, variant_set: ['A', 'B', 'C'].includes(l.var) ? l.var : '', fits: ch.s === 'yes' ? 'yes' : ch.s === 'no' ? 'no' : ch.s === 'unsure' ? 'unsure' : '', evidence: clip(ch.ev, 240), left_out: !!l.off, blocked: l.blocked || '', has_card: l.card }); };
   const lettersOf = (c) => { const seq = c.seq || {}, vars = { A: seq.steps || [] }; ['B', 'C'].forEach((k) => { if ((seq.alt || {})[k]) vars[k] = seq.alt[k].steps || []; });
     return { language: seq.lang || 'en', interval_unit: { d: 'days', h: 'hours', m: 'minutes' }[seq.unit || 'd'], split: seq.split || 'even',
       variants: Object.keys(vars).map((k) => ({ variant: k, for_job_titles: (k === 'A' ? seq.whoA : seq.alt[k].who) || '', letters: vars[k].map((st, i) => ({ letter: k + (i + 1), day: st.day || 0, approved: st.status === 'approved', subject: st.subject || '', body: st.body || '' })) })) }; };
@@ -221,8 +224,9 @@ module.exports = function makeBridge({ db, lib, fetchFn, calls }) {
       let leads = (await col('leads').where('cid', '==', c.id).get()).docs.map((x) => Object.assign({ id: x.id }, x.data())).sort((x, y) => (x.ord || 0) - (y.ord || 0));
       const only = a.only || 'all', pick = { fits: 'yes', unsure: 'unsure', no: 'no' }[only];
       if (pick) leads = leads.filter((l) => (l.chk || {}).s === pick); if (only === 'left_out') leads = leads.filter((l) => l.off);
-      const off = Math.max(0, +a.offset || 0);
-      return { total: leads.length, offset: off, recipients: leads.slice(off, off + 100).map(leadBrief) };
+      const off = Math.max(0, +a.offset || 0), all = (await col('leads').where('cid', '==', c.id).get()).docs.map((x) => Object.assign({ id: x.id }, x.data())).sort((x, y) => (x.ord || 0) - (y.ord || 0));
+      const multi = ['B', 'C'].some((k) => ((c.seq || {}).alt || {})[k]), gets = multi ? lib.assignVariants(c.seq || {}, all.filter((l) => String((l.f || {}).email || '').trim() && !l.off && !l.blocked)) : {};
+      return { total: leads.length, offset: off, recipients: leads.slice(off, off + 100).map((l) => Object.assign(leadBrief(l), multi && gets[l.id] ? { will_get_variant: gets[l.id] } : {})) };
     },
     async campaign_status(me, a) { const c = await cardOf(me, a.card_id); if (c.type !== 'campaign') throw new ToolError('This card is not a campaign.'); return statusOf(c); },
     async get_conversation(me, a) {
@@ -310,6 +314,14 @@ module.exports = function makeBridge({ db, lib, fetchFn, calls }) {
       await col('params').doc(co.id).update(up);
       return { saved: done, company: co.name };
     },
+    async set_sender_name(me, a) {
+      const want = txt(a.mailbox, 200).toLowerCase(), name = txt(a.name, 80).replace(/[\r\n<>"]/g, ' ').trim(); if (!name) throw new ToolError('Give the sender name.');
+      const co = (await mine(me, 'params')).find((p) => p.zone === 'company' && (((p.s || {}).mailboxes) || []).some((b) => String(b.email).toLowerCase() === want)); if (!co) throw new ToolError(`${a.mailbox} is not a mailbox in VECTOR.`);
+      const boxes = co.s.mailboxes.map((b) => Object.assign({}, b)), box = boxes.find((b) => String(b.email).toLowerCase() === want);
+      if (box.owner !== me.uid && !me.superAdmin) throw new ToolError(`${box.email} belongs to another person.`);
+      const was = box.name || ''; box.name = name; await col('params').doc(co.id).update({ 's.mailboxes': boxes });
+      return { saved: true, mailbox: box.email, sender_name: name, was: was || '(empty: the name from the Google profile was used)', note: 'Applies to letters of campaigns started from now on; chains already running keep the old name.' };
+    },
     async create_parameter(me, a) {
       const kind = a.kind, name = txt(a.name, 120); if (!SETTINGS[kind]) throw new ToolError('kind must be direction, audience or topic. Companies are created by the person in VECTOR.'); if (!name) throw new ToolError('Give the parameter a name.');
       const same = (await mine(me, 'params')).find((p) => p.zone === kind && String(p.name).trim().toLowerCase() === name.toLowerCase() && (kind !== 'direction' || p.company === a.company_id));
@@ -386,16 +398,17 @@ module.exports = function makeBridge({ db, lib, fetchFn, calls }) {
       people.forEach((p, i) => { const f = leadFields(p), who = f.email || [f.firstName, f.lastName].filter(Boolean).join(' ') || `person ${i + 1}`;
         if (!f.email || !okMail(f.email)) { res.no_email.push(who); return; } if (seen[f.email]) { res.repeated.push(f.email); return; } if (isBanned(ban, f.email)) { res.forbidden.push(f.email); return; }
         seen[f.email] = 1; const dom = f.email.split('@')[1]; if (!f.website && lib.companyDomain(f.email)) f.website = 'https://' + dom;
-        const id = nid('L'); batch.set(col('leads').doc(id), { id, cid: c.id, vid: c.vid, company: (c.vec || {}).company || '', owner: me.uid, acl: (c.acl || [me.uid]).slice(), ord: ord++, f, blocked: '', okEmail: '', via: 'claude' }); res.added++; });
+        const id = nid('L'); batch.set(col('leads').doc(id), Object.assign({ id, cid: c.id, vid: c.vid, company: (c.vec || {}).company || '', owner: me.uid, acl: (c.acl || [me.uid]).slice(), ord: ord++, f, blocked: '', okEmail: '', via: 'claude' }, ['A', 'B', 'C'].includes(p.variant) ? { var: p.variant } : {})); res.added++; });
       if (res.added) await batch.commit();
       return drop({ added: res.added, total_now: have.length + res.added, skipped_no_valid_email: res.no_email, skipped_already_in_list: res.repeated, skipped_forbidden: res.forbidden });
     },
     async update_recipient(me, a) {
       const c = await cardOf(me, a.card_id), l = await one('leads', a.recipient_id); need(l && l.cid === c.id ? l : null, 'The person in this campaign');
       const up = {}, f = leadFields(a.fields); delete f.email; Object.keys(f).forEach((k) => { up['f.' + k] = f[k]; }); if (a.left_out != null) up.off = !!a.left_out;
+      if (a.variant != null) { if (!['A', 'B', 'C', 'auto'].includes(a.variant)) throw new ToolError('variant must be A, B, C or auto.'); const have = ['A'].concat(['B', 'C'].filter((k) => ((c.seq || {}).alt || {})[k])); if (a.variant !== 'auto' && !have.includes(a.variant)) throw new ToolError(`This campaign has no variant ${a.variant} yet (it has ${have.join(', ')}). Save its letters with set_letters first.`); up.var = a.variant === 'auto' ? '' : a.variant; }
       if (!Object.keys(up).length) throw new ToolError('Nothing to change.');
       await col('leads').doc(l.id).update(up);
-      return { changed: true, recipient: leadBrief(Object.assign({}, l, { off: a.left_out != null ? !!a.left_out : l.off, f: Object.assign({}, l.f, f) })) };
+      return { changed: true, recipient: leadBrief(Object.assign({}, l, { off: a.left_out != null ? !!a.left_out : l.off, var: up.var != null ? up.var : l.var, f: Object.assign({}, l.f, f) })) };
     },
     async set_letters(me, a) {
       const c = await cardOf(me, a.card_id); if (!['campaign', 'contact'].includes(c.type)) throw new ToolError('Letters belong to a campaign or a contact card.');
@@ -447,8 +460,11 @@ module.exports = function makeBridge({ db, lib, fetchFn, calls }) {
       const fresh = people.filter((l) => !sent[String(l.f.email).toLowerCase()]); if (!fresh.length) problems.push(people.length ? 'Everyone on the list has already been written to.' : 'There is nobody to write to.');
       const holes = {}; all.forEach((l) => fresh.forEach((p) => lib.emptyVars(l.subject + '\n' + l.body, Object.assign({ myName: 'x', project: (p.chk || {}).proj || '' }, p.f)).forEach((f) => { const k = `${l.letter} needs {{${f}}}`; holes[k] = (holes[k] || 0) + 1; })));
       Object.keys(holes).forEach((k) => problems.push(`${k}, empty for ${holes[k]} of ${fresh.length}. Fill it in, drop it, or put the phrase in [[double brackets]].`));
-      const run = await col('runs').doc(c.id).get();
-      return Object.assign({ ready: !problems.length }, drop({ problems, card: c.title, kind: solo ? 'one contact' : 'campaign', mailbox: box ? box.email : '', sender_name: box ? box.name || me.name : '', would_write_to: fresh.length, already_written_to: people.length - fresh.length, skipped_forbidden: forbidden.length,
+      const run = await col('runs').doc(c.id).get(), notes = [], shares = {};
+      if (!solo && letters.variants.length > 1) { const pick = lib.assignVariants(c.seq || {}, people); fresh.forEach((l) => { shares[pick[l.id]] = (shares[pick[l.id]] || 0) + 1; }); }
+      const sender = box ? box.name || me.name : '', lang = String(seq.lang || 'en').toLowerCase();
+      if (sender && /[^\u0000-\u024f]/.test(sender) && !['uk', 'ru', 'bg', 'sr', 'kk', 'be'].includes(lang)) notes.push(`The sender name of ${box.email} is "${sender}" — not in Latin letters, while the letters are in "${lang}". Recipients read it next to the address. Offer the person a Latin spelling and save it with set_sender_name.`);
+      return Object.assign({ ready: !problems.length }, drop({ problems, notes, variant_shares: shares, card: c.title, kind: solo ? 'one contact' : 'campaign', mailbox: box ? box.email : '', sender_name: box ? box.name || me.name : '', would_write_to: fresh.length, already_written_to: people.length - fresh.length, skipped_forbidden: forbidden.length,
         people: fresh.slice(0, 15).map((l) => drop({ name: [l.f.firstName, l.f.lastName].filter(Boolean).join(' '), email: l.f.email, company: l.f.company })), opt_out_line: (c.optOut == null ? !!((v || {}).opt || {}).on : !!c.optOut) ? ((v || {}).opt || {}).text || 'on' : 'off',
         letters, already_running: run.exists && run.data().status === 'active', paused: run.exists && run.data().paused ? 'paused: too many bounced letters; a start continues it' : '', sending_rules: 'daily limits, pauses between letters, the recipient\'s working hours; set by the person in VECTOR' }));
     },

@@ -317,3 +317,10 @@ Company profile (23 Nov 2026): a company's settings hold what AI needs to choose
 writes to a client: about, clients, whenUse (the boundary with the other companies), notDo, proof. The overview of
 the bridge shows the profile of every company and calls an empty one out; set_company_profile saves a draft the
 person agreed to. VECTOR's own AI reads the same fields when it writes letters.
+
+Variants per person (24 Nov 2026): who gets which variant is decided in this order — a variant set on the person
+(`var` on the recipient; selector in the Recipients table, `variant` in add_recipients / update_recipient), then job
+titles when the variants name them, otherwise equal shares where colleagues from one company (same email domain or
+company name) get different variants. list_recipients and launch_check show the result before a launch. The bridge
+can also set a mailbox's sender name (set_sender_name) and launch_check warns about a non-Latin name for Latin-script
+letters.

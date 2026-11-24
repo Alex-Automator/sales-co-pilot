@@ -470,7 +470,7 @@ const CA_PROV = { bc: 'America/Vancouver', 'british columbia': 'America/Vancouve
   on: 'America/Toronto', ontario: 'America/Toronto', qc: 'America/Toronto', quebec: 'America/Toronto', québec: 'America/Toronto', ns: 'America/Halifax', 'nova scotia': 'America/Halifax', nb: 'America/Halifax', 'new brunswick': 'America/Halifax' };
 const PHONE = [['380', 'ua'], ['358', 'fi'], ['372', 'ee'], ['371', 'lv'], ['370', 'lt'], ['353', 'ie'], ['351', 'pt'], ['420', 'cz'], ['421', 'sk'], ['971', 'ae'], ['972', 'il'], ['44', 'uk'], ['49', 'de'], ['33', 'fr'], ['34', 'es'], ['39', 'it'], ['31', 'nl'], ['32', 'be'],
   ['41', 'ch'], ['43', 'at'], ['45', 'dk'], ['46', 'se'], ['47', 'no'], ['48', 'pl'], ['40', 'ro'], ['36', 'hu'], ['30', 'gr'], ['90', 'tr'], ['61', 'au'], ['64', 'nz'], ['91', 'in'], ['81', 'jp'], ['82', 'kr'], ['65', 'sg'], ['52', 'mx'], ['55', 'br'], ['1', 'us']];
-const FREE_MAIL = /^(gmail|googlemail|outlook|hotmail|live|msn|yahoo|ymail|icloud|me|mac|aol|proton|protonmail|pm|gmx|web|mail|yandex|ya|ukr|i|meta|bigmir|rambler|zoho|fastmail|hey|tutanota|tuta)\.[a-z.]+$/;
+const FREE_MAIL = /^(gmail|googlemail|outlook|hotmail|live|msn|yahoo|ymail|icloud|me|mac|aol|proton|protonmail|pm|gmx|web|mail|email|inbox|yandex|ya|ukr|i|meta|bigmir|rambler|zoho|fastmail|hey|tutanota|tuta)\.[a-z.]+$/;
 const mailDomain = (email) => String(email || '').trim().toLowerCase().split('@')[1] || '';
 // The client company's own domain, or '' for free mail services (people there are not one company).
 const companyDomain = (email) => { const d = mailDomain(email); return d && !FREE_MAIL.test(d) ? d : ''; };
@@ -519,14 +519,29 @@ const watchPlan = (unitMs) => (unitMs <= UNIT.m ? { every: 3 * 60000, span: 6 * 
 
 // Turns a campaign card and its recipients into ready letters. Nothing is sent here.
 // Each step keeps its distance from the previous letter, so a delay by the sending rules moves the rest of the chain too.
+// Who gets which variant. A choice made for the person wins; then job titles, when the variants name them; otherwise
+// equal shares, where colleagues from one company get different variants as far as the variants allow.
+const coKeyOf = (f) => companyDomain((f || {}).email) || String((f || {}).company || '').trim().toLowerCase();
+function assignVariants(seq, people) {
+  const alt = (seq || {}).alt || {}, vars = ['A'].concat(['B', 'C'].filter((k) => alt[k])), whoOf = (k) => (k === 'A' ? seq.whoA : alt[k].who) || '', out = {}, total = {}, per = {};
+  vars.forEach((v) => { total[v] = 0; });
+  people.forEach((l) => {
+    const key = coKeyOf(l.f), used = key ? (per[key] = per[key] || {}) : {}; let k = 'A';
+    if (vars.includes(l.var)) k = l.var;
+    else if (vars.length > 1 && seq.split === 'role') { const jt = String((l.f || {}).jobTitle || '').toLowerCase(); k = vars.find((v) => wordsOf(whoOf(v)).some((w) => jt.includes(w))) || 'A'; }
+    else if (vars.length > 1) k = vars.slice().sort((a, b) => ((used[a] || 0) - (used[b] || 0)) || (total[a] - total[b]) || (vars.indexOf(a) - vars.indexOf(b)))[0];
+    out[l.id] = k; total[k]++; if (key) used[k] = (used[k] || 0) + 1;
+  });
+  return out;
+}
 function planRun({ card, leads, myName, unitMs }) {
   const seq = card.seq || {}, alt = seq.alt || {}, vars = ['A'].concat(['B', 'C'].filter((k) => alt[k]));
   const stepsOf = (k) => (k === 'A' ? seq.steps : alt[k].steps) || [], whoOf = (k) => (k === 'A' ? seq.whoA : alt[k].who) || '';
   for (const k of vars) { const st = stepsOf(k); if (!st.length) throw new Error(`Variant ${k} has no letters`); st.forEach((x, i) => { if (x.status !== 'approved') throw new Error(`Letter ${k}${i + 1} is not approved yet`); if (!String(x.body || '').trim()) throw new Error(`Letter ${k}${i + 1} is empty`); }); }
   const people = leads.filter((l) => l.f && l.f.email && !l.off && !l.blocked).sort((a, b) => (a.ord || 0) - (b.ord || 0));
-  return people.map((l, n) => {
-    let k = 'A';
-    if (vars.length > 1) { if (seq.split === 'role') { const jt = String(l.f.jobTitle || '').toLowerCase(); k = vars.find((v) => wordsOf(whoOf(v)).some((w) => jt.includes(w))) || 'A'; } else k = vars[n % vars.length]; }
+  const pick = assignVariants(seq, people);
+  return people.map((l) => {
+    const k = pick[l.id] || 'A';
     const r = Object.assign({}, l.f, { project: (l.chk && l.chk.s === 'yes' && l.chk.proj) || '', myName, signature: '' }), st = stepsOf(k);
     const holes = []; st.forEach((x, i) => emptyVars(x.subject + '\n' + x.body, r).forEach((v) => holes.push(`${k}${i + 1}|${v}`)));
     const first = fill(st[0].subject, r).trim();
@@ -557,4 +572,4 @@ async function sendStep(fetchFn, tokens, d, run, now) {
   return out;
 }
 
-module.exports = { mailSearch, mailThread, tzOf, companyDomain, isAutoReply, replyKind, sentSince, nextCheck, convo, reply, replyPrompt, unquote, mailText, READ, SEND, wroteBack, sendState, emptyVars, rawMail, sendMail, MAILER, mailToken, planRun, sendStep, threadState, tokenFor, localParts, inWindow, capFor, gapFor, watchPlan, UNIT, FAR, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };
+module.exports = { assignVariants, mailSearch, mailThread, tzOf, companyDomain, isAutoReply, replyKind, sentSince, nextCheck, convo, reply, replyPrompt, unquote, mailText, READ, SEND, wroteBack, sendState, emptyVars, rawMail, sendMail, MAILER, mailToken, planRun, sendStep, threadState, tokenFor, localParts, inWindow, capFor, gapFor, watchPlan, UNIT, FAR, MODELS, LIMITS, brief, draftPrompt, polishPrompt, reviewPrompt, revisePrompt, parseJson, run, research, criterion, find, emailsOf, safeUrl, pageText, pageLinks, snippets, termsOf };

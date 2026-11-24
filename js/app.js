@@ -338,10 +338,10 @@
     const list = all.filter((l) => !q || [leadName(l), l.f.company, l.f.email, l.f.jobTitle, (l.tags || []).join(' ')].join(' ').toLowerCase().includes(q))
       .filter((l) => rf === 'all' || (rf === 'off' ? l.off : rf === 'todo' ? !chkOf(l, crit) : (chkOf(l, crit) || {}).s === rf));
     // Which variant of the letters each person gets (shown when the campaign has more than one).
-    const sq = seqOf(c), multi = varsOf(sq).length > 1, vmap = {}; if (multi) all.filter(sendable).forEach((l, n) => { vmap[l.id] = variantOf(sq, l, n); });
+    const sq = seqOf(c), vlist = varsOf(sq), multi = vlist.length > 1, vmap = multi ? variantMap(sq, all.filter(sendable)) : {};
     const rows = list.slice(0, 200).map((l) => `<tr class="${l.off ? 'off' : ''}"><td>${esc(l.f.company || '')}</td><td>${esc([l.f.firstName, l.f.lastName].filter(Boolean).join(' ') || '—')}${l.f.jobTitle ? `<small class="ev">${esc(l.f.jobTitle)}</small>` : ''}</td>
       <td>${l.f.email ? esc(l.f.email) : `<input class="in mini" data-lemail="${l.id}" placeholder="${t('addEmail')}">`}</td>
-      ${multi ? `<td><b>${vmap[l.id] || '—'}</b></td>` : ''}<td class="wrapc">${chkCell(l, crit)}</td><td>${(l.tags || []).map((x) => `<span class="tagc">#${esc(x)}</span>`).join(' ')}</td>
+      ${multi ? `<td><select class="in mini" data-leadvar="${l.id}" title="${t('varPick')}"><option value="">${t('varAuto')}${vmap[l.id] && !vlist.includes(l.var) ? ' · ' + vmap[l.id] : ''}</option>${vlist.map((k) => `<option value="${k}" ${l.var === k ? 'selected' : ''}>${k}</option>`).join('')}</select></td>` : ''}<td class="wrapc">${chkCell(l, crit)}</td><td>${(l.tags || []).map((x) => `<span class="tagc">#${esc(x)}</span>`).join(' ')}</td>
       <td>${blockedWhy(l) ? `<span class="blk" title="${t(blockedWhy(l) === 'admin' ? 'blockedAdmin' : 'blockedTaken')}">${t('blockedBadge')}</span>` : l.card ? `<span class="ty">${t('hasCard')}</span>` : `<button class="link" data-act="leadCard" data-id="${l.id}">${t('toCard')}</button>`}</td>
       <td><button class="link" data-act="leadOff" data-id="${l.id}">${t(l.off ? 'leadOn' : 'leadOff')}</button> <button class="link" data-act="leadDel" data-id="${l.id}">×</button></td></tr>`).join('');
     if (!all.length) return `<p class="later">${t('noLeadsYet')}</p><div class="acts"><button class="btn sm" data-act="ctab" data-v="source">← ${t('tabSource')}</button></div>`;
@@ -443,7 +443,7 @@
     if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
     return rows.filter((r) => r.some((x) => x.trim() !== ''));
   }
-  const FREE_MAIL = /^(gmail|googlemail|outlook|hotmail|live|msn|icloud|me|mac|aol|proton|protonmail|pm|gmx|mail|zoho|yandex|ya|ukr|i|meta|bigmir|email|inbox|fastmail|hey|tutanota|tuta|yahoo|ymail|rambler|bk|list)\.[a-z.]+$/i;
+  const FREE_MAIL = /^(gmail|googlemail|outlook|hotmail|live|msn|yahoo|ymail|icloud|me|mac|aol|proton|protonmail|pm|gmx|web|mail|email|inbox|yandex|ya|ukr|i|meta|bigmir|rambler|zoho|fastmail|hey|tutanota|tuta)\.[a-z.]+$/i;
   function importLeads(c, text) {
     const rows = parseTable(text), norm = (h) => String(h).toLowerCase().replace(/[^a-z]/g, '');
     let hi = -1, map = null;
@@ -495,11 +495,19 @@
   const whoOf = (s, k) => (k === 'A' ? s.whoA : s.alt[k].who) || '';
   const words = (x) => String(x || '').toLowerCase().split(/[,;\n]/).map((w) => w.trim()).filter(Boolean);
   // Which variant a recipient gets: by job title when the campaign is split that way, otherwise in turn.
-  function variantOf(s, lead, n) {
-    const vs = varsOf(s); if (vs.length === 1) return 'A';
-    if (s.split !== 'role') return vs[n % vs.length];
-    const jt = String(lead.f.jobTitle || '').toLowerCase();
-    return vs.find((k) => words(whoOf(s, k)).some((w) => jt.includes(w))) || 'A';
+  // Who gets which variant: the same order of decisions as on the server. A choice made for the person wins; then job
+  // titles; otherwise equal shares, where colleagues from one company get different variants as far as possible.
+  function variantMap(s, list) {
+    const vs = varsOf(s), out = {}, total = {}, per = {}; vs.forEach((v) => { total[v] = 0; });
+    const keyOf = (f) => { const d = String(f.email || '').trim().toLowerCase().split('@')[1] || ''; return (d && !FREE_MAIL.test(d) ? d : '') || String(f.company || '').trim().toLowerCase(); };
+    list.slice().sort((a, b) => (a.ord || 0) - (b.ord || 0)).forEach((l) => {
+      const key = keyOf(l.f), used = key ? (per[key] = per[key] || {}) : {}; let k = 'A';
+      if (vs.includes(l.var)) k = l.var;
+      else if (vs.length > 1 && s.split === 'role') { const jt = String(l.f.jobTitle || '').toLowerCase(); k = vs.find((v) => words(whoOf(s, v)).some((w) => jt.includes(w))) || 'A'; }
+      else if (vs.length > 1) k = vs.slice().sort((a, b) => ((used[a] || 0) - (used[b] || 0)) || (total[a] - total[b]) || (vs.indexOf(a) - vs.indexOf(b)))[0];
+      out[l.id] = k; total[k]++; if (key) used[k] = (used[k] || 0) + 1;
+    });
+    return out;
   }
   const modeOf = (st, k) => st.mode || { B: 'gpt', C: 'manual' }[k] || 'claude';
   const stepReady = (st, i) => !!(st.body.trim() && (i > 0 || st.subject.trim()));
@@ -565,7 +573,7 @@
     const seq = seqOf(c), v = S.vectors.find((x) => x.id === c.vid), co = v ? item('company', v.company) : null, mbs = myMailboxes(co);
     const from = mbs.length ? `<select class="in" data-seqfrom>${mbs.map((m) => `<option ${((seq.from || primaryMailbox(co)) === m.email) ? 'selected' : ''}>${esc(m.email)}</option>`).join('')}</select>` : `<span class="sub">${t('noMailbox')}</span>`;
     const list = stepsOf(c), vs = varsOf(seq), k = curVar(seq), nextV = ['B', 'C'].find((x) => !seq.alt[x]);
-    const cnt = {}, whoGets = {}; S.leads.filter((l) => l.cid === c.id && sendable(l)).forEach((l, n) => { const x = variantOf(seq, l, n); cnt[x] = (cnt[x] || 0) + 1; (whoGets[x] = whoGets[x] || []).push([l.f.firstName, l.f.lastName].filter(Boolean).join(' ') || l.f.email); });
+    const cnt = {}, whoGets = {}; const vm = variantMap(seq, S.leads.filter((l) => l.cid === c.id && sendable(l))); S.leads.filter((l) => l.cid === c.id && sendable(l)).forEach((l) => { const x = vm[l.id] || 'A'; cnt[x] = (cnt[x] || 0) + 1; (whoGets[x] = whoGets[x] || []).push([l.f.firstName, l.f.lastName].filter(Boolean).join(' ') || l.f.email); });
     const vtabs = c.type !== 'campaign' ? '' : `<div class="vtabs">${vs.map((x) => `<button class="chip ${x === k ? 'on' : ''}" data-act="seqTab" data-v="${x}">${t('variant')} ${x} · ${cnt[x] || 0}</button>`).join('')}
         ${nextV ? `<button class="chip dash" data-act="seqTabAdd" title="${t('variantHint')}">+ ${t('variant')} ${nextV}</button>` : ''}${k !== 'A' ? `<button class="link small" data-act="seqTabDel">${t('removeVariant')} ${k}</button>` : ''}</div>
       ${vs.length < 2 ? '' : `<div class="row2 vset"><label class="fl"><span>${t('splitHow')}</span><select class="in" data-seqsplit><option value="even" ${seq.split !== 'role' ? 'selected' : ''}>${t('split_even')}</option><option value="role" ${seq.split === 'role' ? 'selected' : ''}>${t('split_role')}</option></select></label>
@@ -1276,6 +1284,7 @@
   document.addEventListener('change', (e) => {
     const el = e.target, c = cur();
     if (el.hasAttribute('data-file')) { takeImage(el.files[0]); return; }
+    if (el.hasAttribute('data-leadvar')) { const l = S.leads.find((x) => x.id === el.dataset.leadvar); if (l) { if (el.value) l.var = el.value; else delete l.var; commit(); } return; }
     if (el.hasAttribute('data-leadfile')) { const f = el.files[0]; if (f && c) f.text().then((txt) => importLeads(c, txt)); return; }
     if (el.hasAttribute('data-seqfrom') && c) { seqOf(c).from = el.value; commit(); return; }
     if (el.hasAttribute('data-seqsplit') && c) { seqOf(c).split = el.value; commit(); return; }
